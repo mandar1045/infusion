@@ -80,6 +80,35 @@ defmodule Infusion.RealSpecsTest do
     end
   end
 
+  test "five real specs go through the whole pipeline into the IR" do
+    for name <- @specs do
+      {:ok, spec} = Spec.load(spec(name))
+      {:ok, resolved} = Infusion.Ref.resolve(spec.document)
+      {:ok, normalized, _} = Infusion.Normalize.run(resolved)
+      {ms, {:ok, ir}} = timed(fn -> Infusion.IR.build(normalized) end)
+
+      ops = ir.operations
+      modules = ops |> Enum.map(& &1.module) |> Enum.uniq() |> length()
+      strategies = Enum.frequencies_by(ops, & &1.naming)
+      renamed = Enum.count(ir.warnings, &(&1 =~ "is taken"))
+      unsupported = Enum.count(ir.warnings, &(&1 =~ "unsupported keywords"))
+      kinds = ir.schemas |> Map.values() |> Enum.frequencies_by(& &1.kind)
+
+      assert length(ops) > 100
+
+      assert ops |> Enum.map(&{&1.module, &1.function}) |> Enum.uniq() |> length() == length(ops),
+             "#{name}: duplicate names"
+
+      assert ms < 10_000
+
+      IO.puts(
+        "  #{name}: #{ms} ms, #{length(ops)} ops in #{modules} modules, naming #{inspect(strategies)}, " <>
+          "#{renamed} renamed, #{Enum.count(ops, & &1.streaming?)} streaming, schemas #{inspect(kinds)}, " <>
+          "#{unsupported} unsupported, #{length(ir.warnings)} warnings"
+      )
+    end
+  end
+
   defp count(term, fun) do
     case term do
       %{} = map ->
