@@ -49,6 +49,56 @@ defmodule Infusion.RealSpecsTest do
     end
   end
 
+  test "five real specs normalize: no 3.1 null types left, allOf merged or explained" do
+    for name <- @specs do
+      {:ok, spec} = Spec.load(spec(name))
+      {:ok, resolved} = Infusion.Ref.resolve(spec.document)
+      {ms, {:ok, normalized, warnings}} = timed(fn -> Infusion.Normalize.run(resolved) end)
+
+      null_types =
+        count(normalized, fn m ->
+          match?(%{"type" => t} when is_list(t), m) and "null" in m["type"]
+        end)
+
+      false_nullable = count(normalized, &match?(%{"nullable" => false}, &1))
+      all_of_before = count(resolved, &Map.has_key?(&1, "allOf"))
+      all_of_after = count(normalized, &Map.has_key?(&1, "allOf"))
+
+      assert null_types == 0, "#{name}: #{null_types} type lists still contain null"
+      assert false_nullable == 0
+      assert ms < 20_000, "#{name} took #{ms} ms"
+
+      kinds =
+        warnings
+        |> Enum.map(&(&1.message |> String.split(":") |> hd() |> String.slice(0, 45)))
+        |> Enum.frequencies()
+
+      IO.puts(
+        "  #{name}: #{ms} ms, allOf #{all_of_before} -> #{all_of_after} left, " <>
+          "#{length(warnings)} warnings #{inspect(kinds)}"
+      )
+    end
+  end
+
+  defp count(term, fun) do
+    case term do
+      %{} = map ->
+        self = if fun.(map), do: 1, else: 0
+
+        Enum.reduce(map, self, fn
+          {key, _}, acc when key in ~w(example default enum const examples) -> acc
+          {"x-" <> _, _}, acc -> acc
+          {_, v}, acc -> acc + count(v, fun)
+        end)
+
+      list when is_list(list) ->
+        Enum.reduce(list, 0, &(&2 + count(&1, fun)))
+
+      _ ->
+        0
+    end
+  end
+
   defp refs_outside_literals(%{"$ref" => ref} = map) when is_binary(ref),
     do: [ref | refs_outside_literals(Map.delete(map, "$ref"))]
 
