@@ -6,20 +6,16 @@ OpenAPI spec.
 > Status: design. Nothing is published yet.
 
 ```console
-$ mix infusion.gen https://example.com/openapi.json --name Anthropic
+$ mix infusion.gen https://raw.githubusercontent.com/openai/openai-openapi/main/openapi.yaml --name OpenAI
 ```
 
 ```elixir
-{:ok, message} =
-  Anthropic.Messages.create(
-    model: "claude-sonnet-4-5",
-    max_tokens: 1024,
-    messages: [%{role: "user", content: "Hello"}]
-  )
+{:ok, response} =
+  OpenAI.Responses.create(model: "gpt-5.5", input: "Say hello")
 
 # Streaming, as a plain Elixir Stream
-Anthropic.Messages.stream(params)
-|> Stream.each(&IO.write(&1.delta.text))
+OpenAI.Responses.stream(model: "gpt-5.5", input: "Write a haiku")
+|> Stream.each(&IO.write(&1.delta))
 |> Stream.run()
 ```
 
@@ -97,13 +93,17 @@ up like that.
 ## First SDKs
 
 Popular APIs whose Elixir clients are missing or stale (Hex, November 2026),
-all of which publish OpenAPI specs:
+all of which publish official OpenAPI specs:
 
-  * **Anthropic**: the community client hasn't been released in 1.4 years
   * **GitHub**: no maintained SDK (the best option is 5.7 years old)
   * **Cloudflare**: no SDK
   * **Twilio**: the main client hasn't been released in 2.6 years, yet gets
     122k downloads per 90 days
+
+OpenAI is the stress test: its spec uses streaming, uploads and unions
+throughout. Anthropic would be a natural target, but it no longer publishes
+its spec. See [the spec survey](docs/spec-survey.md) for what these specs
+demand of a generator.
 
 ## Prior art
 
