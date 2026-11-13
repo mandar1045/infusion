@@ -78,4 +78,27 @@ defmodule Infusion.Runtime.SchemaTest do
     assert Schema.decode("x", {:array, :string}) == "x"
     assert %Drawing{shapes: nil} = Schema.decode_module(%{"shapes" => nil}, Drawing)
   end
+
+  test "a schema module that isn't loaded yet is loaded, not mistaken for a non-struct" do
+    dir = Path.join(System.tmp_dir!(), "infusion_lazy_#{System.unique_integer([:positive])}")
+    File.mkdir_p!(dir)
+    on_exit(fn -> Code.delete_path(dir) && File.rm_rf!(dir) end)
+
+    [{module, binary}] =
+      Code.compile_string("""
+      defmodule Infusion.Runtime.SchemaTest.Lazy do
+        defstruct [:id, __extra__: %{}, __present__: []]
+        def __schema__(:fields), do: [{:id, "id", :string}]
+      end
+      """)
+
+    File.write!(Path.join(dir, "#{module}.beam"), binary)
+    Code.prepend_path(dir)
+    :code.purge(module)
+    :code.delete(module)
+    :code.purge(module)
+    refute :code.is_loaded(module)
+
+    assert %{__struct__: ^module, id: "x"} = Schema.decode(%{"id" => "x"}, {:ref, module})
+  end
 end

@@ -12,7 +12,7 @@ defmodule Infusion.IR do
 
   alias Infusion.{Naming, Ref}
 
-  defstruct operations: [], schemas: %{}, servers: [], warnings: []
+  defstruct operations: [], schemas: %{}, servers: [], auth: nil, warnings: []
 
   defmodule Operation do
     @moduledoc "One API call."
@@ -56,8 +56,12 @@ defmodule Infusion.IR do
   end
 
   defmodule Response do
-    @moduledoc "A response for one status (or `:default`)."
-    defstruct [:status, :content_type, :schema, :description, streaming?: false]
+    @moduledoc """
+    A response for one status (or `:default`). `schema` is the body's schema
+    (JSON preferred); a response that can also stream (`text/event-stream`)
+    has `streaming?` set and the schema of each event in `stream_schema`.
+    """
+    defstruct [:status, :content_type, :schema, :stream_schema, :description, streaming?: false]
   end
 
   defmodule Schema do
@@ -138,6 +142,7 @@ defmodule Infusion.IR do
        operations: operations,
        schemas: schemas,
        servers: servers(document["servers"]),
+       auth: auth(document),
        warnings: warnings
      }}
   end
@@ -257,26 +262,33 @@ defmodule Infusion.IR do
       content = r["content"] || %{}
       types = Map.keys(content)
       streaming? = "text/event-stream" in types
+      body_types = List.delete(types, "text/event-stream")
+      preferred = Enum.find(body_types, &json?/1) || List.first(body_types)
 
-      preferred =
+      schema = content_schema(content, preferred, "#{where} response #{status}")
+
+      stream_schema =
         if streaming?,
-          do: "text/event-stream",
-          else: Enum.find(types, &json?/1) || List.first(types)
-
-      schema =
-        case preferred && get_in(content, [preferred, "schema"]) do
-          nil -> nil
-          s -> schema(s, "#{where} response #{status}")
-        end
+          do: content_schema(content, "text/event-stream", "#{where} stream #{status}")
 
       {status,
        %Response{
          status: status,
-         content_type: preferred,
+         content_type: preferred || (streaming? && "text/event-stream") || nil,
          schema: schema,
+         stream_schema: stream_schema,
          description: r["description"],
          streaming?: streaming?
        }}
+    end
+  end
+
+  defp content_schema(_content, nil, _where), do: nil
+
+  defp content_schema(content, type, where) do
+    case get_in(content, [type, "schema"]) do
+      nil -> nil
+      s -> schema(s, where)
     end
   end
 
@@ -304,6 +316,42 @@ defmodule Infusion.IR do
       end)
 
     ops
+  end
+
+  # How the API wants its credential: the first scheme the document requires,
+  # else the first it defines. nil when the spec says nothing (GitHub).
+  defp auth(document) do
+    schemes = get_in(document, ["components", "securitySchemes"]) || %{}
+
+    required =
+      for requirement <- List.wrap(document["security"]),
+          is_map(requirement),
+          {name, _scopes} <- requirement,
+          do: name
+
+    name =
+      Enum.find(required, &Map.has_key?(schemes, &1)) ||
+        schemes |> Map.keys() |> Enum.sort() |> List.first()
+
+    case schemes[name] do
+      %{"type" => "http", "scheme" => scheme} when is_binary(scheme) ->
+        case String.downcase(scheme) do
+          "basic" -> :basic
+          _ -> :bearer
+        end
+
+      %{"type" => "apiKey", "in" => "header", "name" => header} ->
+        if String.downcase(header) == "authorization", do: :bearer, else: {:header, header}
+
+      %{"type" => "apiKey", "in" => "query", "name" => param} ->
+        {:query, param}
+
+      %{"type" => type} when type in ["oauth2", "openIdConnect"] ->
+        :bearer
+
+      _ ->
+        nil
+    end
   end
 
   defp servers(nil), do: []

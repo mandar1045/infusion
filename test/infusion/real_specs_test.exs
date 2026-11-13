@@ -118,19 +118,19 @@ defmodule Infusion.RealSpecsTest do
         {"cloudflare.json", "Cloudflare"}
       ] do
     @tag timeout: :infinity
-    test "every schema of #{name} generates code that compiles without warnings" do
-      compile_schemas!(unquote(name), unquote(base))
-      if unquote(base) == "OpenAI", do: decode_chat_completion!()
+    test "the whole #{name} SDK generates code that compiles without warnings" do
+      compile_sdk!(unquote(name), unquote(base))
+
+      if unquote(base) == "OpenAI" do
+        decode_chat_completion!()
+        call_chat_completion!()
+      end
     end
   end
 
-  defp compile_schemas!(name, base) do
-    {:ok, spec} = Spec.load(spec(name))
-    {:ok, resolved} = Infusion.Ref.resolve(spec.document)
-    {:ok, normalized, _} = Infusion.Normalize.run(resolved)
-    {:ok, ir} = Infusion.IR.build(normalized)
-
-    {gen_ms, {files, _modules}} = timed(fn -> Infusion.Gen.Schemas.render(ir, base) end)
+  defp compile_sdk!(name, base) do
+    {gen_ms, {:ok, result}} = timed(fn -> Infusion.generate(spec(name), name: base) end)
+    files = Enum.filter(result.files, &(&1.module && String.ends_with?(&1.path, ".ex")))
 
     dir =
       Path.join(System.tmp_dir!(), "infusion-gen-#{base}-#{System.unique_integer([:positive])}")
@@ -143,23 +143,58 @@ defmodule Infusion.RealSpecsTest do
         path
       end
 
-    {compile_ms, result} =
+    {compile_ms, compiled} =
       timed(fn -> Kernel.ParallelCompiler.compile(paths, return_diagnostics: true) end)
 
-    assert {:ok, modules, %{compile_warnings: warnings}} = result, "#{name} did not compile"
+    assert {:ok, modules, %{compile_warnings: warnings}} = compiled, "#{name} did not compile"
 
     IO.puts(
-      "  #{name}: #{length(files)} schema modules generated in #{gen_ms} ms, " <>
-        "compiled in #{compile_ms} ms, #{length(warnings)} warnings"
+      "  #{name}: #{length(result.ir.operations)} operations, #{length(files)} modules " <>
+        "generated in #{gen_ms} ms, compiled in #{compile_ms} ms, #{length(warnings)} warnings"
     )
 
     # The compiler also returns the Inspect implementations @derive creates.
-    schema_modules =
+    sdk_modules =
       Enum.reject(modules, &String.starts_with?(Atom.to_string(&1), "Elixir.Inspect."))
 
-    assert length(schema_modules) == length(files)
+    assert length(sdk_modules) == length(files)
     assert warnings == [], inspect(Enum.take(warnings, 3), pretty: true)
     File.rm_rf!(dir)
+  end
+
+  # The generated function, the runtime and Req, against a stub of the API.
+  defp call_chat_completion! do
+    Req.Test.stub(__MODULE__, fn conn ->
+      {:ok, body, conn} = Plug.Conn.read_body(conn)
+      assert conn.request_path == "/v1/chat/completions"
+      assert %{"model" => "gpt-5.5", "messages" => [_]} = JSON.decode!(body)
+
+      Req.Test.json(conn, %{
+        "id" => "chatcmpl-2",
+        "object" => "chat.completion",
+        "created" => 1,
+        "model" => "gpt-5.5",
+        "choices" => [
+          %{
+            "index" => 0,
+            "finish_reason" => "stop",
+            "message" => %{"role" => "assistant", "content" => "Hi"}
+          }
+        ]
+      })
+    end)
+
+    chat = Module.concat(["OpenAI.Chat"])
+
+    assert {:ok, response} =
+             chat.create_completion(
+               [model: "gpt-5.5", messages: [%{role: "user", content: "Hello"}]],
+               api_key: "sk-test",
+               req_options: [plug: {Req.Test, __MODULE__}]
+             )
+
+    assert [%{message: %{content: "Hi"}}] = response.choices
+    IO.puts("  openai.json: OpenAI.Chat.create_completion/2 called end to end")
   end
 
   # A real chat completion decodes into the generated structs.

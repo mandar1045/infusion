@@ -37,10 +37,47 @@ defmodule Infusion.Runtime.Schema do
 
   def decode(json, _type), do: json
 
+  @doc """
+  Turns request data into JSON-ready terms: generated structs become maps
+  with their JSON names (fields left `nil` are dropped unless they were
+  present, and `__extra__` is kept), atom keys and atom values become
+  strings. Used for request bodies, so callers can pass structs, maps or
+  keyword lists.
+  """
+  @spec encode(term) :: term
+  def encode(%module{} = struct) do
+    if function_exported?(module, :__schema__, 1) and Map.has_key?(struct, :__present__) do
+      present = struct.__present__ || []
+
+      fields =
+        for {field, name, _type} <- module.__schema__(:fields),
+            value = Map.get(struct, field),
+            value != nil or field in present,
+            into: %{},
+            do: {name, encode(value)}
+
+      Map.merge(encode(struct.__extra__ || %{}), fields)
+    else
+      struct
+    end
+  end
+
+  def encode(map) when is_map(map), do: Map.new(map, fn {k, v} -> {key(k), encode(v)} end)
+
+  def encode([{k, _} | _] = keyword) when is_atom(k) and k != nil,
+    do: Map.new(keyword, fn {k, v} -> {key(k), encode(v)} end)
+
+  def encode(list) when is_list(list), do: Enum.map(list, &encode/1)
+  def encode(atom) when is_atom(atom) and atom not in [nil, true, false], do: Atom.to_string(atom)
+  def encode(other), do: other
+
+  defp key(k) when is_atom(k), do: Atom.to_string(k)
+  defp key(k), do: k
+
   @doc "Decodes `json` as the schema `module`."
   @spec decode_module(term, module) :: term
   def decode_module(json, module) do
-    if function_exported?(module, :__struct__, 0) and is_map(json) do
+    if is_map(json) and struct_module?(module) do
       decode_object(json, module)
     else
       decode(json, module.__schema__(:type))
@@ -108,7 +145,7 @@ defmodule Infusion.Runtime.Schema do
   defp score(_json, :any), do: 0
 
   defp score(json, {:ref, module}) when is_map(json) do
-    if function_exported?(module, :__struct__, 0) do
+    if struct_module?(module) do
       fields = module.__schema__(:fields)
 
       mismatch =
@@ -127,11 +164,18 @@ defmodule Infusion.Runtime.Schema do
 
   # Not a map: an object schema can't match it; another named type might.
   defp score(json, {:ref, module}) do
-    if function_exported?(module, :__struct__, 0),
+    if struct_module?(module),
       do: :no,
       else: score(json, module.__schema__(:type))
   end
 
   defp score(json, {:union, variants, _}), do: if(best_variant(json, variants), do: 1, else: :no)
   defp score(_json, _type), do: :no
+
+  # function_exported?/3 is false for a module that isn't loaded yet, and
+  # outside releases modules load on first use: load it first.
+  defp struct_module?(module) do
+    Code.ensure_loaded(module)
+    function_exported?(module, :__struct__, 0)
+  end
 end

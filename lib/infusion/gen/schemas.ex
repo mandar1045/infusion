@@ -20,6 +20,7 @@ defmodule Infusion.Gen.Schemas do
   alias Infusion.IR
   alias Infusion.IR.Schema
   alias Infusion.Naming
+  alias Infusion.Gen.Source
 
   @type file :: %{module: String.t(), path: String.t(), source: String.t()}
 
@@ -31,7 +32,7 @@ defmodule Infusion.Gen.Schemas do
   def render(%IR{schemas: schemas}, base) do
     modules = module_names(Map.keys(schemas), base)
     {schemas, modules} = extract_inline(schemas, modules)
-    dir = "lib/" <> (base |> Naming.words() |> Enum.join("_")) <> "/schemas/"
+    dir = "lib/" <> Naming.package(base) <> "/schemas/"
 
     # File names come from the (unique) module names, not the schema names:
     # Cloudflare has schemas that differ only in punctuation.
@@ -346,16 +347,9 @@ defmodule Infusion.Gen.Schemas do
       |> Enum.reject(&(&1 == ""))
       |> Enum.join("\n\n")
 
-    if body == "", do: "false", else: lit(body, printable_limit: :infinity)
+    Source.doc(body)
   end
 
-  # Every Elixir literal written into generated code goes through here:
-  # `inspect/1` shortens long lists to `[..., ...]` (Stripe has enums with
-  # hundreds of values) and long strings, which would corrupt the code.
-  defp lit(term), do: inspect(term, limit: :infinity, printable_limit: :infinity)
-
-  defp lit(term, _opts), do: lit(term)
-
-  defp format(source),
-    do: source |> Code.format_string!() |> IO.iodata_to_binary() |> Kernel.<>("\n")
+  defp lit(term), do: Source.lit(term)
+  defp format(source), do: Source.format(source)
 end

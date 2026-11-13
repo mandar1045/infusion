@@ -11,7 +11,8 @@ defmodule Infusion.Runtime.MixProject do
       elixir: "~> 1.18",
       start_permanent: Mix.env() == :prod,
       deps: deps(),
-      description: "The runtime shared by SDKs generated with Infusion: HTTP, retries, streaming, pagination",
+      description:
+        "The runtime shared by SDKs generated with Infusion: HTTP, retries, streaming, pagination",
       package: package(),
       source_url: @source_url
     ]
@@ -24,6 +25,9 @@ defmodule Infusion.Runtime.MixProject do
   defp deps do
     [
       {:req, "~> 0.5"},
+      {:jason, "~> 1.4"},
+      {:telemetry, "~> 1.0"},
+      {:plug, "~> 1.14", only: :test},
       {:ex_doc, "~> 0.34", only: :dev, runtime: false}
     ]
   end

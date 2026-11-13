@@ -3,21 +3,33 @@
 Infuse any API into Elixir: official-quality Elixir SDKs, generated from an
 OpenAPI spec.
 
-> Status: design. Nothing is published yet.
+> Status: early, nothing published yet. It generates complete SDKs for
+> OpenAI, GitHub, Stripe, Twilio and Cloudflare that compile without
+> warnings, and the generated GitHub SDK makes live API calls. Streaming and
+> pagination are next.
 
 ```console
 $ mix infusion.gen https://raw.githubusercontent.com/openai/openai-openapi/main/openapi.yaml --name OpenAI
 ```
 
 ```elixir
-{:ok, response} =
-  OpenAI.Responses.create(model: "gpt-5.5", input: "Say hello")
+{:ok, completion} =
+  OpenAI.Chat.create_completion(
+    model: "gpt-5.5",
+    messages: [%{role: "user", content: "Say hello"}]
+  )
 
-# Streaming, as a plain Elixir Stream
-OpenAI.Responses.stream(model: "gpt-5.5", input: "Write a haiku")
-|> Stream.each(&IO.write(&1.delta))
-|> Stream.run()
+[%{message: %{content: text}}] = completion.choices
+
+# Every call returns typed structs, or a typed error
+case GitHub.Repos.get("elixir-lang", "elixir") do
+  {:ok, %GitHub.Schemas.FullRepository{stargazers_count: stars}} -> stars
+  {:error, %Infusion.Runtime.Error{type: :not_found}} -> nil
+end
 ```
+
+The OpenAI SDK (388 operations, 2,754 files) generates in about 6 seconds
+and compiles without a single warning.
 
 ## Why
 
@@ -43,7 +55,7 @@ company could ship them as their official Elixir SDK.
 
 ## What it generates
 
-  * **One module per resource** (`Anthropic.Messages`, `GitHub.Repos`), one
+  * **One module per resource** (`OpenAI.Models`, `GitHub.Repos`), one
     function per operation, with docs from the spec and typespecs.
   * **Structs for every schema**, decoded from responses, with **real union
     types**: a `oneOf` becomes a set of structs you can pattern match on, not
@@ -52,7 +64,7 @@ company could ship them as their official Elixir SDK.
   * **Pagination** as lazy streams (`GitHub.Repos.list_stream(...)`).
   * **File uploads** (multipart), **auth** (bearer, API key, basic, OAuth
     token), **retries** with backoff on 429 and 5xx, **timeouts**.
-  * **Typed errors**: `{:error, %Anthropic.Error{status: 429, type: ...}}`.
+  * **Typed errors**: `{:error, %Infusion.Runtime.Error{type: :rate_limit, status: 429, request_id: ...}}`.
   * **Webhook signature verification** where the spec describes it.
   * **Test helpers**: stub any operation in ExUnit through `Req.Test`.
   * **Docs** that build with ExDoc, and a `mix.exs` ready to publish.

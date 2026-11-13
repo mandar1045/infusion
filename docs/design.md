@@ -93,10 +93,9 @@ The intermediate representation:
 github_sdk/
   mix.exs                      # depends on :infusion_runtime
   infusion.exs                 # the config above
-  lib/github.ex                # client: config, auth, request/3 for custom calls
+  lib/github.ex                # client: defaults from the spec, config/1, request/4
   lib/github/repos.ex          # one module per group, one function per operation
   lib/github/schemas/*.ex      # one struct per schema
-  lib/github/error.ex
   lib/github/custom/           # hand-written code; the generator never touches it
   test/
   .infusion/manifest.json      # every generated file and its hash
@@ -111,19 +110,42 @@ custom one of the same name (`lib/openai/custom/responses.ex`) with `use`, so
 helpers like `OpenAI.Responses.stream_text/2` live in the same module as the
 generated functions.
 
-**Functions.** Path parameters are positional; everything else is a keyword
-list:
+**Functions.** Path parameters are positional. Query, header and body
+parameters are one map or keyword list; call options come last, so a body
+field named `timeout` never clashes with the `timeout:` option:
 
 ```elixir
 GitHub.Repos.get("elixir-lang", "elixir")
-GitHub.Repos.list_for_org("elixir-lang", per_page: 100)          # one page
-GitHub.Repos.list_for_org_stream("elixir-lang") |> Enum.take(250) # all pages, lazily
-OpenAI.Responses.create(model: "gpt-5.5", input: "Hi", timeout: 30_000, max_retries: 5)
-GitHub.Repos.get("elixir-lang", "elixir", raw: true)              # {:ok, repo, %Response{headers: ...}}
+GitHub.Repos.list_for_org("elixir-lang", per_page: 100)                  # one page
+GitHub.Repos.list_for_org_stream("elixir-lang") |> Enum.take(250)         # all pages, lazily (planned)
+OpenAI.Chat.create_completion(%{model: "gpt-5.5", messages: msgs}, timeout: 30_000, max_retries: 5)
+GitHub.Repos.get("elixir-lang", "elixir", raw: true)                      # {:ok, %Req.Response{body: %FullRepository{}}}
 ```
 
-Each returns `{:ok, value}` or `{:error, %GitHub.Error{}}`; a `!` variant
-raises.
+Each returns `{:ok, value}` or `{:error, %Infusion.Runtime.Error{}}`; a `!`
+variant raises. One error type for every SDK means one way to handle errors
+across all of them.
+
+The operation itself is data, kept in a module attribute next to the
+function, and the runtime does the rest:
+
+```elixir
+@retrieve_operation %{
+  id: "retrieveModel",
+  method: :get,
+  path: "/models/{model}",
+  path_params: ["model"],
+  params: [],                                  # [{key, wire_name, :query | :header | :body}]
+  response: {:ref, OpenAI.Schemas.Model}
+}
+
+def retrieve(model, opts \\ []), do: OpenAI.__request__(@retrieve_operation, [model], %{}, opts)
+```
+
+Parameters the SDK doesn't know go into the body (or the query, for
+operations without one), so a parameter the API added after the SDK was
+generated can still be sent. `OpenAI.request(:get, "/new/endpoint", params)`
+reaches endpoints the spec doesn't describe.
 
 ## Types
 

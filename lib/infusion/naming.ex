@@ -155,6 +155,16 @@ defmodule Infusion.Naming do
     |> ensure_leading_letter("op_")
   end
 
+  @doc """
+  The package name for a base module, as the vendor writes it: `OpenAI` is
+  `openai`, `GitHub` is `github` (not `open_ai`, `git_hub`). Used for the
+  app, the directory and the API key's environment variable.
+  """
+  @spec package(String.t()) :: String.t()
+  def package(base) do
+    base |> String.downcase() |> String.replace(~r/[^a-z0-9]+/, "_") |> String.trim("_")
+  end
+
   @doc "Splits camelCase, PascalCase, kebab, snake, dotted and spaced names into lowercase words."
   @spec words(String.t()) :: [String.t()]
   def words(name) do
