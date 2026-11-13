@@ -109,6 +109,92 @@ defmodule Infusion.RealSpecsTest do
     end
   end
 
+  # One test per spec: compiling Cloudflare's ~9,000 modules alone takes minutes.
+  for {name, base} <- [
+        {"openai.json", "OpenAI"},
+        {"stripe.json", "Stripe"},
+        {"github.json", "GitHub"},
+        {"twilio_api.json", "Twilio"},
+        {"cloudflare.json", "Cloudflare"}
+      ] do
+    @tag timeout: :infinity
+    test "every schema of #{name} generates code that compiles without warnings" do
+      compile_schemas!(unquote(name), unquote(base))
+      if unquote(base) == "OpenAI", do: decode_chat_completion!()
+    end
+  end
+
+  defp compile_schemas!(name, base) do
+    {:ok, spec} = Spec.load(spec(name))
+    {:ok, resolved} = Infusion.Ref.resolve(spec.document)
+    {:ok, normalized, _} = Infusion.Normalize.run(resolved)
+    {:ok, ir} = Infusion.IR.build(normalized)
+
+    {gen_ms, {files, _modules}} = timed(fn -> Infusion.Gen.Schemas.render(ir, base) end)
+
+    dir =
+      Path.join(System.tmp_dir!(), "infusion-gen-#{base}-#{System.unique_integer([:positive])}")
+
+    paths =
+      for f <- files do
+        path = Path.join(dir, f.path)
+        File.mkdir_p!(Path.dirname(path))
+        File.write!(path, f.source)
+        path
+      end
+
+    {compile_ms, result} =
+      timed(fn -> Kernel.ParallelCompiler.compile(paths, return_diagnostics: true) end)
+
+    assert {:ok, modules, %{compile_warnings: warnings}} = result, "#{name} did not compile"
+
+    IO.puts(
+      "  #{name}: #{length(files)} schema modules generated in #{gen_ms} ms, " <>
+        "compiled in #{compile_ms} ms, #{length(warnings)} warnings"
+    )
+
+    # The compiler also returns the Inspect implementations @derive creates.
+    schema_modules =
+      Enum.reject(modules, &String.starts_with?(Atom.to_string(&1), "Elixir.Inspect."))
+
+    assert length(schema_modules) == length(files)
+    assert warnings == [], inspect(Enum.take(warnings, 3), pretty: true)
+    File.rm_rf!(dir)
+  end
+
+  # A real chat completion decodes into the generated structs.
+  defp decode_chat_completion! do
+    # Called dynamically: the module only exists once the test generated it.
+    response_module = Module.concat(["OpenAI.Schemas.CreateChatCompletionResponse"])
+
+    response =
+      response_module.decode(%{
+        "id" => "chatcmpl-1",
+        "object" => "chat.completion",
+        "created" => 1_700_000_000,
+        "model" => "gpt-5.5",
+        "choices" => [
+          %{
+            "index" => 0,
+            "finish_reason" => "stop",
+            "message" => %{"role" => "assistant", "content" => "Hello!", "refusal" => nil}
+          }
+        ],
+        "usage" => %{"prompt_tokens" => 5, "completion_tokens" => 2, "total_tokens" => 7},
+        "service_tier" => "default",
+        "a_field_from_the_future" => true
+      })
+
+    assert response.id == "chatcmpl-1"
+    assert [%{finish_reason: "stop", message: message}] = response.choices
+    assert message.__struct__ == OpenAI.Schemas.ChatCompletionResponseMessage
+    assert message.content == "Hello!"
+    assert response.usage.__struct__ == OpenAI.Schemas.CompletionUsage
+    assert response.usage.total_tokens == 7
+    assert response.__extra__ == %{"a_field_from_the_future" => true}
+    IO.puts("  openai.json: a chat completion decodes into the generated structs")
+  end
+
   defp count(term, fun) do
     case term do
       %{} = map ->

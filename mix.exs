@@ -10,6 +10,8 @@ defmodule Infusion.MixProject do
       version: @version,
       elixir: "~> 1.18",
       start_permanent: Mix.env() == :prod,
+      # Tests compile generated SDK code, whose structs derive Inspect.
+      consolidate_protocols: Mix.env() != :test,
       deps: deps(),
       description: "Generate official-quality Elixir SDKs from OpenAPI specs",
       package: package(),
@@ -27,6 +29,8 @@ defmodule Infusion.MixProject do
       {:req, "~> 0.5"},
       {:yaml_elixir, "~> 2.11"},
       {:plug, "~> 1.14", only: :test},
+      # Generated code is compiled and run in the tests.
+      {:infusion_runtime, path: "runtime", only: :test},
       {:ex_doc, "~> 0.34", only: :dev, runtime: false}
     ]
   end
