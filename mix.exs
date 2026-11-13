@@ -24,6 +24,9 @@ defmodule Infusion.MixProject do
 
   defp deps do
     [
+      {:req, "~> 0.5"},
+      {:yaml_elixir, "~> 2.11"},
+      {:plug, "~> 1.14", only: :test},
       {:ex_doc, "~> 0.34", only: :dev, runtime: false}
     ]
   end
