@@ -46,7 +46,7 @@ defmodule Infusion.Runtime.Request do
   `:error`) and `:retries`.
   """
 
-  alias Infusion.Runtime.{Config, Error, Form, Schema}
+  alias Infusion.Runtime.{Config, Error, Form, Schema, SSE}
 
   @retry_statuses [408, 409, 429]
   @max_server_delay 60_000
@@ -66,6 +66,44 @@ defmodule Infusion.Runtime.Request do
     end)
   end
 
+  @doc """
+  Runs a streaming operation: `{:ok, stream}` of decoded events, or
+  `{:error, error}` when the request fails before any event arrives.
+
+  The operation says how to ask for a stream (`stream_param: {"stream", true}`)
+  and how to decode each event (`stream_response`). Until the response
+  starts, the request is retried like any other; once events flow it never
+  is. The stream is lazy and must be consumed by the process that called
+  this; stopping early (`Enum.take/2`) closes the connection. An error the
+  API sends inside the stream is raised as `Infusion.Runtime.Error`. A
+  `data: [DONE]` event ends the stream.
+  """
+  @spec stream(Config.t(), map, [term], map | keyword | term, keyword) ::
+          {:ok, Enumerable.t()} | {:error, Error.t()}
+  def stream(%Config{} = config, operation, path_args, params, opts \\ []) do
+    config = Config.merge(config, opts)
+    params = put_stream_param(params, operation[:stream_param])
+    request = build(config, operation, path_args, params, opts)
+    meta = %{operation: operation[:id], method: operation.method, url: request.url}
+
+    :telemetry.span([:infusion, :request], meta, fn ->
+      {result, retries} = attempt(%{request | into: :self}, config, 0)
+      stop = Map.merge(meta, stop_meta(result, retries))
+
+      result =
+        case result do
+          {:ok, %Req.Response{status: status} = response} when status in 200..299 ->
+            events = events(response, operation)
+            if opts[:raw], do: {:ok, %{response | body: events}}, else: {:ok, events}
+
+          other ->
+            finish(other, operation, config, opts)
+        end
+
+      {result, stop}
+    end)
+  end
+
   @doc "Unwraps a result for the `!` functions: returns the value or raises the error."
   def unwrap!({:ok, value}), do: value
   def unwrap!({:error, %Error{} = error}), do: raise(error)
@@ -81,7 +119,7 @@ defmodule Infusion.Runtime.Request do
     url =
       case Form.pairs(query, :repeat) do
         [] -> url
-        pairs -> url <> "?" <> URI.encode_query(pairs, :rfc3986)
+        pairs -> url <> separator(url) <> URI.encode_query(pairs, :rfc3986)
       end
 
     headers =
@@ -97,9 +135,13 @@ defmodule Infusion.Runtime.Request do
       method: op.method,
       url: url <> auth_query,
       headers: headers,
-      body: encode_body(op[:body], body, config)
+      body: encode_body(op[:body], body, config),
+      into: nil
     }
   end
+
+  # Some paths carry a query already (OpenAI's "/responses?beta=true").
+  defp separator(url), do: if(String.contains?(url, "?"), do: "&", else: "?")
 
   defp path(template, names, args) when length(names) == length(args) do
     Enum.zip(names, args)
@@ -179,8 +221,7 @@ defmodule Infusion.Runtime.Request do
   defp auth_query(url, config) do
     case {config.auth, Config.credential(config)} do
       {{:query, name}, key} when key != nil ->
-        sep = if String.contains?(url, "?"), do: "&", else: "?"
-        {url, sep <> URI.encode_query([{name, to_string(key)}], :rfc3986)}
+        {url, separator(url) <> URI.encode_query([{name, to_string(key)}], :rfc3986)}
 
       _ ->
         {url, ""}
@@ -250,13 +291,48 @@ defmodule Infusion.Runtime.Request do
         retry: false,
         receive_timeout: config.timeout
       ] ++
-        if(config.user_agent, do: [user_agent: config.user_agent], else: [])
+        if(config.user_agent, do: [user_agent: config.user_agent], else: []) ++
+        if(request.into, do: [into: request.into], else: [])
 
     options
     |> Req.new()
     |> Req.merge(body_opts)
     |> Req.merge(config.req_options)
     |> Req.request()
+    |> read_unless_streaming()
+  end
+
+  # A streamed request that didn't get an event stream back (an error, or
+  # a plain JSON answer) is read in full, so it is handled like any other.
+  defp read_unless_streaming(
+         {:ok, %Req.Response{body: %Req.Response.Async{}} = response} = result
+       ) do
+    if response.status in 200..299 and event_stream?(response) do
+      result
+    else
+      body = response.body |> Enum.to_list() |> IO.iodata_to_binary()
+      {:ok, %{response | body: decode_json(body, response)}}
+    end
+  end
+
+  defp read_unless_streaming(result), do: result
+
+  defp event_stream?(response) do
+    Enum.any?(
+      Req.Response.get_header(response, "content-type"),
+      &String.starts_with?(&1, "text/event-stream")
+    )
+  end
+
+  defp decode_json(body, response) do
+    json? =
+      Enum.any?(Req.Response.get_header(response, "content-type"), &String.contains?(&1, "json"))
+
+    with true <- json?, {:ok, json} <- Jason.decode(body) do
+      json
+    else
+      _ -> body
+    end
   end
 
   defp retry?({:error, _exception}), do: true
@@ -347,6 +423,56 @@ defmodule Infusion.Runtime.Request do
        response.headers,
        request_id(response, config)
      )}
+  end
+
+  ## Streams
+
+  defp put_stream_param(params, nil), do: params
+
+  defp put_stream_param(params, {name, value}) when is_map(params) or is_list(params) do
+    if params == [] or is_map(params) or is_tuple(hd(params)) do
+      params
+      |> Enum.reject(fn {key, _} -> to_string(key) == name end)
+      |> Kernel.++([{name, value}])
+    else
+      params
+    end
+  end
+
+  defp put_stream_param(params, _), do: params
+
+  defp events(%Req.Response{body: %Req.Response.Async{} = body}, op) do
+    body
+    |> Stream.transform(&SSE.new/0, &SSE.parse(&2, &1), &{SSE.flush(&1), &1}, fn _ -> :ok end)
+    |> Stream.transform(:ok, fn event, acc ->
+      case decode_event(event, op) do
+        :done -> {:halt, acc}
+        :skip -> {[], acc}
+        {:ok, value} -> {[value], acc}
+      end
+    end)
+  end
+
+  # 2xx but not an event stream: the API answered in one piece.
+  defp events(%Req.Response{body: body}, op), do: [decode(body, op[:response])]
+
+  defp decode_event(%SSE.Event{data: "[DONE]"}, _op), do: :done
+  defp decode_event(%SSE.Event{data: ""}, _op), do: :skip
+
+  defp decode_event(%SSE.Event{event: name, data: data}, op) do
+    case Jason.decode(data) do
+      {:ok, %{"error" => error} = json} when is_map(error) or name == "error" ->
+        raise Error.from_stream(json)
+
+      {:ok, json} when name == "error" ->
+        raise Error.from_stream(json)
+
+      {:ok, json} ->
+        {:ok, decode(json, op[:stream_response])}
+
+      {:error, _} ->
+        {:ok, data}
+    end
   end
 
   defp decode("", _type), do: nil

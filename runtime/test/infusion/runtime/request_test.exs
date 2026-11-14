@@ -363,4 +363,130 @@ defmodule Infusion.Runtime.RequestTest do
       assert_received {:event, [:infusion, :request, :stop], %{status: 200, retries: 1}}
     end
   end
+
+  describe "streams" do
+    defmodule Chunk do
+      defstruct [:id, :delta, __extra__: %{}, __present__: []]
+      def __schema__(:fields), do: [{:id, "id", :string}, {:delta, "delta", :string}]
+    end
+
+    @chat_stream %{
+      id: "createChat",
+      method: :post,
+      path: "/chat/completions",
+      path_params: [],
+      params: [{:model, "model", :body}, {:stream, "stream", :body}],
+      body: :json,
+      response: nil,
+      stream_response: {:ref, Chunk},
+      stream_param: {"stream", true}
+    }
+
+    defp sse(conn, status \\ 200, chunks) do
+      conn =
+        conn
+        |> Plug.Conn.put_resp_content_type("text/event-stream")
+        |> Plug.Conn.send_chunked(status)
+
+      Enum.reduce(chunks, conn, fn chunk, conn ->
+        {:ok, conn} = Plug.Conn.chunk(conn, chunk)
+        conn
+      end)
+    end
+
+    test "asks for a stream and decodes each event; [DONE] ends it" do
+      Req.Test.expect(__MODULE__, fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        assert JSON.decode!(body) == %{"model" => "m", "stream" => true}
+
+        sse(conn, [
+          ~s(data: {"id":"c1","delta":"Hel"}\n\nda),
+          ~s(ta: {"id":"c1","delta":"lo"}\n\n: ping\n\n),
+          "data: [DONE]\n\ndata: {\"id\":\"after-done\"}\n\n"
+        ])
+      end)
+
+      assert {:ok, stream} = Request.stream(config(), @chat_stream, [], model: "m", stream: false)
+      assert [%Chunk{delta: "Hel"}, %Chunk{delta: "lo"}] = Enum.to_list(stream)
+    end
+
+    test "stopping early is fine" do
+      Req.Test.expect(__MODULE__, fn conn ->
+        sse(conn, [~s(data: {"delta":"a"}\n\n), ~s(data: {"delta":"b"}\n\n)])
+      end)
+
+      {:ok, stream} = Request.stream(config(), @chat_stream, [], %{model: "m"})
+      assert [%Chunk{delta: "a"}] = Enum.take(stream, 1)
+    end
+
+    test "errors before the stream starts are retried, then typed" do
+      Req.Test.expect(__MODULE__, &Plug.Conn.send_resp(&1, 503, ""))
+      Req.Test.expect(__MODULE__, &sse(&1, [~s(data: {"delta":"ok"}\n\n)]))
+
+      assert {:ok, stream} = Request.stream(config(), @chat_stream, [], model: "m")
+      assert [%Chunk{delta: "ok"}] = Enum.to_list(stream)
+      assert_received {:slept, _}
+
+      Req.Test.expect(__MODULE__, fn conn ->
+        conn
+        |> Plug.Conn.put_resp_header("x-request-id", "req_9")
+        |> Plug.Conn.put_status(400)
+        |> Req.Test.json(%{"error" => %{"message" => "Unknown model"}})
+      end)
+
+      assert {:error,
+              %Error{type: :bad_request, request_id: "req_9", message: "400: Unknown model"}} =
+               Request.stream(config(), @chat_stream, [], model: "nope")
+    end
+
+    test "an error event inside the stream is raised" do
+      Req.Test.expect(__MODULE__, fn conn ->
+        sse(conn, [
+          ~s(data: {"delta":"a"}\n\n),
+          ~s(data: {"error":{"message":"Overloaded","type":"server_error"}}\n\n)
+        ])
+      end)
+
+      {:ok, stream} = Request.stream(config(), @chat_stream, [], model: "m")
+
+      error = assert_raise Error, "Overloaded", fn -> Enum.to_list(stream) end
+      assert error.type == :api_error
+      assert error.body["error"]["type"] == "server_error"
+
+      Req.Test.expect(__MODULE__, &sse(&1, [~s(event: error\ndata: {"message":"Gone"}\n\n)]))
+      {:ok, stream} = Request.stream(config(), @chat_stream, [], model: "m")
+      assert_raise Error, "Gone", fn -> Enum.to_list(stream) end
+    end
+
+    test "a query stream parameter, on a path that already has a query" do
+      op = %{
+        @chat_stream
+        | method: :get,
+          path: "/responses/{id}?beta=true",
+          path_params: ["id"],
+          params: [{:stream, "stream", :query}],
+          body: nil
+      }
+
+      Req.Test.expect(__MODULE__, fn conn ->
+        assert conn.query_string == "beta=true&stream=true"
+        sse(conn, [~s(data: {"id":"r1"}\n\n)])
+      end)
+
+      assert {:ok, stream} = Request.stream(config(), op, ["r1"], [])
+      assert [%Chunk{id: "r1"}] = Enum.to_list(stream)
+    end
+
+    test "a plain JSON answer to a stream request is one element" do
+      Req.Test.expect(__MODULE__, &Req.Test.json(&1, %{"id" => "whole"}))
+      op = %{@chat_stream | response: {:ref, Chunk}}
+      assert {:ok, [%Chunk{id: "whole"}]} = Request.stream(config(), op, [], model: "m")
+    end
+
+    test "text events stay text" do
+      Req.Test.expect(__MODULE__, &sse(&1, ["data: plain words\n\n"]))
+      {:ok, stream} = Request.stream(config(), @chat_stream, [], model: "m")
+      assert Enum.to_list(stream) == ["plain words"]
+    end
+  end
 end

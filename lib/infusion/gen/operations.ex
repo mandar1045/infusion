@@ -105,6 +105,7 @@ defmodule Infusion.Gen.Operations do
     params = params(op, ir)
     takes_params? = params != [] or op.body != nil
     response = response(op)
+    stream = stream(op, ir)
 
     args = path_vars ++ if(takes_params?, do: ["params \\\\ %{}"], else: []) ++ ["opts \\\\ []"]
     call_params = if takes_params?, do: "params", else: "%{}"
@@ -130,7 +131,8 @@ defmodule Infusion.Gen.Operations do
         path_params: Enum.map(op.path_params, & &1.name),
         params: params,
         body: body_type(op.body),
-        server: if(server != default_server, do: server)
+        server: if(server != default_server, do: server),
+        stream_param: stream && stream.param
       }
       |> Map.merge(content_type(op.body))
 
@@ -144,40 +146,86 @@ defmodule Infusion.Gen.Operations do
     spec_args = Enum.join(specs, ", ")
     return = "{:ok, #{result_spec}} | {:error, Infusion.Runtime.Error.t()}"
 
-    """
-    #{attribute} #{operation_literal(operation, response, modules)}
+    head = """
+    #{attribute} #{operation_literal(operation, response, stream, modules)}
 
-    @doc #{doc(op, params, ir)}
-    #{deprecated}@spec #{name}(#{spec_args}) :: #{return}
-    def #{name}(#{Enum.join(args, ", ")}), do: #{call}
-
-    @doc #{lit("Like `#{name}/#{arity}`, but returns the result or raises `Infusion.Runtime.Error`.")}
-    #{deprecated}@spec #{name}!(#{spec_args}) :: #{result_spec}
-    def #{name}!(#{Enum.join(args, ", ")}), do: Infusion.Runtime.Request.unwrap!(#{call})
+    @doc #{doc(op, params, ir, stream)}
     """
+
+    stream_call = String.replace(call, ".__request__(", ".__stream__(")
+    stream_spec = "{:ok, Enumerable.t()} | {:error, Infusion.Runtime.Error.t()}"
+    args = Enum.join(args, ", ")
+
+    cond do
+      # Only an event stream comes back: the function streams.
+      stream && response == nil ->
+        """
+        #{head}#{deprecated}@spec #{name}(#{spec_args}) :: #{stream_spec}
+        def #{name}(#{args}), do: #{stream_call}
+
+        @doc #{lit("Like `#{name}/#{arity}`, but returns the stream or raises `Infusion.Runtime.Error`.")}
+        #{deprecated}@spec #{name}!(#{spec_args}) :: Enumerable.t()
+        def #{name}!(#{args}), do: Infusion.Runtime.Request.unwrap!(#{stream_call})
+        """
+
+      true ->
+        plain = """
+        #{head}#{deprecated}@spec #{name}(#{spec_args}) :: #{return}
+        def #{name}(#{args}), do: #{call}
+
+        @doc #{lit("Like `#{name}/#{arity}`, but returns the result or raises `Infusion.Runtime.Error`.")}
+        #{deprecated}@spec #{name}!(#{spec_args}) :: #{result_spec}
+        def #{name}!(#{args}), do: Infusion.Runtime.Request.unwrap!(#{call})
+        """
+
+        if stream do
+          event = Schemas.typespec(stream.schema, modules)
+
+          plain <>
+            """
+
+            @doc #{Source.doc("Like `#{name}/#{arity}`, but streams the response: returns a lazy stream of `#{event}` events.\n\nRead it in the process that called this; stopping early closes the connection. An error the API sends mid-stream is raised as `Infusion.Runtime.Error`.")}
+            #{deprecated}@spec #{name}_stream(#{spec_args}) :: #{stream_spec}
+            def #{name}_stream(#{args}), do: #{stream_call}
+
+            @doc #{lit("Like `#{name}_stream/#{arity}`, but returns the stream or raises `Infusion.Runtime.Error`.")}
+            #{deprecated}@spec #{name}_stream!(#{spec_args}) :: Enumerable.t()
+            def #{name}_stream!(#{args}), do: Infusion.Runtime.Request.unwrap!(#{stream_call})
+            """
+        else
+          plain
+        end
+    end
   end
 
   # The operation map, with the response type written as a descriptor
   # (module names in it are code, not strings).
-  defp operation_literal(operation, response, modules) do
+  defp operation_literal(operation, response, stream, modules) do
     descriptor =
       case response do
         {:json, schema} -> Schemas.descriptor(schema, modules)
         _ -> "nil"
       end
 
+    stream_descriptor =
+      if stream,
+        do: [", stream_response: " <> Schemas.descriptor(stream.schema, modules)],
+        else: []
+
     fields =
       operation
       |> Enum.reject(fn {_k, v} -> v == nil end)
       |> Enum.sort_by(fn {k, _} ->
         Enum.find_index(
-          ~w(id method path path_params params body content_type server)a,
+          ~w(id method path path_params params body content_type server stream_param)a,
           &(&1 == k)
         )
       end)
       |> Enum.map(fn {k, v} -> "#{k}: #{lit(v)}" end)
 
-    "%{" <> Enum.join(fields ++ ["response: #{descriptor}"], ", ") <> "}"
+    "%{" <>
+      Enum.join(fields ++ ["response: #{descriptor}"], ", ") <>
+      Enum.join(stream_descriptor) <> "}"
   end
 
   ## Parameters
@@ -263,9 +311,48 @@ defmodule Infusion.Gen.Operations do
 
   defp json?(type), do: type == "application/json" or String.ends_with?(type || "", "+json")
 
+  # How an operation that can answer with Server-Sent Events streams:
+  # %{schema: event schema, param: how to ask for the stream}, or nil.
+  # OpenAI asks with `stream: true` in the body (or the query), and its
+  # speech endpoint with `stream_format: "sse"`.
+  defp stream(%Operation{streaming?: false}, _ir), do: nil
+
+  defp stream(%Operation{} = op, ir) do
+    response =
+      op.responses
+      |> Enum.filter(fn {status, r} ->
+        is_binary(status) and String.starts_with?(status, "2") and r.streaming?
+      end)
+      |> Enum.sort()
+      |> Enum.map(&elem(&1, 1))
+      |> List.first()
+
+    fields = Map.new(body_fields(op.body, ir), &{&1.name, &1})
+
+    param =
+      cond do
+        Map.has_key?(fields, "stream") -> {"stream", true}
+        Enum.any?(op.query_params, &(&1.name == "stream")) -> {"stream", true}
+        sse_format?(fields["stream_format"], ir) -> {"stream_format", "sse"}
+        true -> nil
+      end
+
+    %{schema: (response && response.stream_schema) || %Schema{kind: :any}, param: param}
+  end
+
+  defp sse_format?(nil, _ir), do: false
+
+  defp sse_format?(%{schema: schema}, ir) do
+    case schema do
+      %Schema{kind: :enum, values: values} -> "sse" in values
+      %Schema{kind: :ref, ref: ref} -> sse_format?(%{schema: ir.schemas[ref] || %Schema{}}, ir)
+      _ -> false
+    end
+  end
+
   ## Docs
 
-  defp doc(op, params, ir) do
+  defp doc(op, params, ir, stream) do
     summary = String.trim(op.summary || "")
     description = String.trim(op.description || "")
     description = if description == summary, do: "", else: description
@@ -287,13 +374,24 @@ defmodule Infusion.Gen.Operations do
       "`#{op.method |> Atom.to_string() |> String.upcase()} #{op.path}`",
       section("Path parameters", path_docs),
       section("Parameters", param_docs),
-      if(op.streaming?,
-        do: "Streaming responses (`text/event-stream`) are not decoded yet.",
-        else: ""
-      )
+      stream_doc(op, stream)
     ]
 
     sections |> Enum.reject(&(&1 == "")) |> Enum.join("\n\n") |> Source.doc()
+  end
+
+  defp stream_doc(_op, nil), do: ""
+
+  defp stream_doc(op, %{param: param}) do
+    asks =
+      case param do
+        {name, value} -> " It sends `#{name}: #{inspect(value)}` for you."
+        nil -> ""
+      end
+
+    if response(op) == nil,
+      do: "Returns a lazy stream of events (Server-Sent Events).#{asks}",
+      else: "To stream the response as it is generated, use `#{safe(op.function)}_stream`.#{asks}"
   end
 
   defp section(_title, []), do: ""

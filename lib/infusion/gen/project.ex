@@ -102,6 +102,11 @@ defmodule Infusion.Gen.Project do
       def __request__(operation, path_args, params, opts) do
         Infusion.Runtime.Request.run(config(), operation, path_args, params, opts)
       end
+
+      @doc false
+      def __stream__(operation, path_args, params, opts) do
+        Infusion.Runtime.Request.stream(config(), operation, path_args, params, opts)
+      end
     end
     """
     |> format()

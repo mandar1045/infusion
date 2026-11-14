@@ -22,6 +22,7 @@ defmodule Infusion.Gen.OperationsTest do
           "required" => ["id"],
           "properties" => %{"id" => %{"type" => "string"}, "name" => %{"type" => "string"}}
         },
+        "Word" => %{"type" => "object", "properties" => %{"text" => %{"type" => "string"}}},
         "NewPet" => %{
           "type" => "object",
           "required" => ["name"],
@@ -129,6 +130,56 @@ defmodule Infusion.Gen.OperationsTest do
           "responses" => %{"204" => %{"description" => "stored"}}
         }
       },
+      "/pets/{petId}/chat" => %{
+        "post" => %{
+          "operationId" => "chatWithPet",
+          "tags" => ["Chat"],
+          "parameters" => [
+            %{
+              "name" => "petId",
+              "in" => "path",
+              "required" => true,
+              "schema" => %{"type" => "string"}
+            }
+          ],
+          "requestBody" => %{
+            "content" => %{
+              "application/json" => %{
+                "schema" => %{
+                  "type" => "object",
+                  "properties" => %{
+                    "say" => %{"type" => "string"},
+                    "stream" => %{"type" => "boolean"}
+                  }
+                }
+              }
+            }
+          },
+          "responses" => %{
+            "200" => %{
+              "description" => "a reply, or a stream of words",
+              "content" => %{
+                "application/json" => %{"schema" => %{"$ref" => "#/components/schemas/Pet"}},
+                "text/event-stream" => %{"schema" => %{"$ref" => "#/components/schemas/Word"}}
+              }
+            }
+          }
+        }
+      },
+      "/events" => %{
+        "get" => %{
+          "operationId" => "watchEvents",
+          "tags" => ["Events"],
+          "responses" => %{
+            "200" => %{
+              "description" => "events",
+              "content" => %{
+                "text/event-stream" => %{"schema" => %{"$ref" => "#/components/schemas/Word"}}
+              }
+            }
+          }
+        }
+      },
       "/adoptions" => %{
         "post" => %{
           "operationId" => "adopt",
@@ -181,17 +232,23 @@ defmodule Infusion.Gen.OperationsTest do
          ]}
       )
 
-    {:ok, _modules, %{compile_warnings: [], runtime_warnings: []}} =
-      result.files
-      |> Enum.filter(&(&1.module && String.ends_with?(&1.path, ".ex")))
-      |> Enum.map(fn f ->
-        file =
-          Path.join(System.tmp_dir!(), "infusion_gen_#{System.unique_integer([:positive])}.ex")
+    dir =
+      Path.join(System.tmp_dir!(), "infusion-gen-petstore-#{System.unique_integer([:positive])}")
 
-        File.write!(file, f.source)
-        file
-      end)
-      |> Kernel.ParallelCompiler.compile(return_diagnostics: true)
+    try do
+      {:ok, _modules, %{compile_warnings: [], runtime_warnings: []}} =
+        result.files
+        |> Enum.filter(&(&1.module && String.ends_with?(&1.path, ".ex")))
+        |> Enum.map(fn f ->
+          file = Path.join(dir, f.path)
+          File.mkdir_p!(Path.dirname(file))
+          File.write!(file, f.source)
+          file
+        end)
+        |> Kernel.ParallelCompiler.compile(return_diagnostics: true)
+    after
+      File.rm_rf!(dir)
+    end
 
     %{result: result}
   end
@@ -313,5 +370,37 @@ defmodule Infusion.Gen.OperationsTest do
     assert_received {:slept, _}
     assert_received {:slept, _}
     refute_received {:slept, _}
+  end
+
+  defp sse(conn, body) do
+    conn
+    |> Plug.Conn.put_resp_content_type("text/event-stream")
+    |> Plug.Conn.send_resp(200, body)
+  end
+
+  test "an operation that can stream gets a _stream function that asks for it" do
+    Req.Test.expect(__MODULE__, fn conn ->
+      {:ok, body, conn} = Plug.Conn.read_body(conn)
+      assert conn.request_path == "/v2/pets/p1/chat"
+      assert JSON.decode!(body) == %{"say" => "hi", "stream" => true}
+      sse(conn, ~s(data: {"text":"woof"}\n\ndata: {"text":"woof!"}\n\n))
+    end)
+
+    assert {:ok, stream} = sdk("Chat").with_pet_stream("p1", say: "hi")
+
+    assert [%{__struct__: PetStore.Schemas.Word, text: "woof"}, %{text: "woof!"}] =
+             Enum.to_list(stream)
+
+    Req.Test.expect(__MODULE__, &Req.Test.json(&1, %{"id" => "p1", "name" => "Rex"}))
+
+    assert {:ok, %{__struct__: PetStore.Schemas.Pet, name: "Rex"}} =
+             sdk("Chat").with_pet("p1", say: "hi")
+  end
+
+  test "an operation that only streams returns the stream itself" do
+    Req.Test.expect(__MODULE__, &sse(&1, ~s(data: {"text":"born"}\n\n)))
+
+    assert [%{__struct__: PetStore.Schemas.Word, text: "born"}] =
+             sdk("Events").watch!() |> Enum.to_list()
   end
 end

@@ -174,8 +174,14 @@ The behaviour every SDK shares, built on Req:
     `min(0.5s * 2^n, 8s)` with up to 25% jitter; an idempotency key reused
     across retries where the API names a header
   * timeouts: 10 minutes by default, per request
-  * streaming: Server-Sent Events as an Elixir `Stream`; a stream that has
-    started is never retried
+  * streaming: Server-Sent Events as a lazy Elixir `Stream` of decoded
+    events. Operations that can stream get a `<name>_stream` function; the
+    operation says how to ask for a stream (`stream_param: {"stream", true}`,
+    or `{"stream_format", "sse"}` for OpenAI's speech endpoint) and how to
+    decode each event (`stream_response`). Retried until the response starts,
+    never after; `data: [DONE]` ends it; an error event inside the stream is
+    raised. Operations that only stream return the stream from the plain
+    function.
   * pagination: the styles above, as lazy streams
   * errors: connection, timeout, and status errors with `type`
     (`:rate_limit`, `:not_found`, ...), body, headers and request ID

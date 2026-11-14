@@ -135,31 +135,35 @@ defmodule Infusion.RealSpecsTest do
     dir =
       Path.join(System.tmp_dir!(), "infusion-gen-#{base}-#{System.unique_integer([:positive])}")
 
-    paths =
-      for f <- files do
-        path = Path.join(dir, f.path)
-        File.mkdir_p!(Path.dirname(path))
-        File.write!(path, f.source)
-        path
-      end
+    # Removed even when an assertion fails: Cloudflare's SDK is 10,000 files.
+    try do
+      paths =
+        for f <- files do
+          path = Path.join(dir, f.path)
+          File.mkdir_p!(Path.dirname(path))
+          File.write!(path, f.source)
+          path
+        end
 
-    {compile_ms, compiled} =
-      timed(fn -> Kernel.ParallelCompiler.compile(paths, return_diagnostics: true) end)
+      {compile_ms, compiled} =
+        timed(fn -> Kernel.ParallelCompiler.compile(paths, return_diagnostics: true) end)
 
-    assert {:ok, modules, %{compile_warnings: warnings}} = compiled, "#{name} did not compile"
+      assert {:ok, modules, %{compile_warnings: warnings}} = compiled, "#{name} did not compile"
 
-    IO.puts(
-      "  #{name}: #{length(result.ir.operations)} operations, #{length(files)} modules " <>
-        "generated in #{gen_ms} ms, compiled in #{compile_ms} ms, #{length(warnings)} warnings"
-    )
+      IO.puts(
+        "  #{name}: #{length(result.ir.operations)} operations, #{length(files)} modules " <>
+          "generated in #{gen_ms} ms, compiled in #{compile_ms} ms, #{length(warnings)} warnings"
+      )
 
-    # The compiler also returns the Inspect implementations @derive creates.
-    sdk_modules =
-      Enum.reject(modules, &String.starts_with?(Atom.to_string(&1), "Elixir.Inspect."))
+      # The compiler also returns the Inspect implementations @derive creates.
+      sdk_modules =
+        Enum.reject(modules, &String.starts_with?(Atom.to_string(&1), "Elixir.Inspect."))
 
-    assert length(sdk_modules) == length(files)
-    assert warnings == [], inspect(Enum.take(warnings, 3), pretty: true)
-    File.rm_rf!(dir)
+      assert length(sdk_modules) == length(files)
+      assert warnings == [], inspect(Enum.take(warnings, 3), pretty: true)
+    after
+      File.rm_rf!(dir)
+    end
   end
 
   # The generated function, the runtime and Req, against a stub of the API.
@@ -195,6 +199,37 @@ defmodule Infusion.RealSpecsTest do
 
     assert [%{message: %{content: "Hi"}}] = response.choices
     IO.puts("  openai.json: OpenAI.Chat.create_completion/2 called end to end")
+
+    Req.Test.stub(__MODULE__, fn conn ->
+      {:ok, body, conn} = Plug.Conn.read_body(conn)
+      assert JSON.decode!(body)["stream"] == true
+
+      chunk = fn text ->
+        "data: " <>
+          JSON.encode!(%{
+            "id" => "c",
+            "object" => "chat.completion.chunk",
+            "created" => 1,
+            "model" => "gpt-5.5",
+            "choices" => [%{"index" => 0, "delta" => %{"content" => text}}]
+          }) <> "\n\n"
+      end
+
+      conn
+      |> Plug.Conn.put_resp_content_type("text/event-stream")
+      |> Plug.Conn.send_resp(200, chunk.("Hel") <> chunk.("lo") <> "data: [DONE]\n\n")
+    end)
+
+    text =
+      chat.create_completion_stream!(
+        [model: "gpt-5.5", messages: [%{role: "user", content: "Hello"}]],
+        api_key: "sk-test",
+        req_options: [plug: {Req.Test, __MODULE__}]
+      )
+      |> Enum.map_join(fn chunk -> hd(chunk.choices).delta.content end)
+
+    assert text == "Hello"
+    IO.puts("  openai.json: OpenAI.Chat.create_completion_stream!/2 streamed end to end")
   end
 
   # A real chat completion decodes into the generated structs.

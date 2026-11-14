@@ -6,7 +6,7 @@ OpenAPI spec.
 > **Status: early.** Nothing is on Hex yet. Infusion already generates
 > complete SDKs for OpenAI, Stripe, GitHub, Twilio and Cloudflare that
 > compile without a single warning, and the generated GitHub SDK makes live
-> API calls. Streaming and pagination are next.
+> API calls. Streaming works; pagination is next.
 
 ```console
 $ mix infusion.gen https://raw.githubusercontent.com/openai/openai-openapi/main/openapi.yaml --name OpenAI
@@ -21,6 +21,11 @@ Generated OpenAI in openai_sdk/: 388 operations, 2272 schemas, 2754 files (5828 
   )
 
 [%{message: %{content: text}}] = completion.choices
+
+# Streaming, as a plain Elixir Stream of typed events
+OpenAI.Chat.create_completion_stream!(model: "gpt-5.5", messages: messages)
+|> Stream.flat_map(& &1.choices)
+|> Enum.each(&IO.write(&1.delta.content || ""))
 
 # Typed structs in, typed errors out
 case GitHub.Repos.get("elixir-lang", "elixir") do
@@ -47,7 +52,7 @@ operations, 2,272 schemas):
 | HTTP client | not generated: you write it | yes (Tesla) | yes (Req), with retries |
 | Union types (`string` or list of parts) | reduced to `[map]` | an empty struct | real unions, decoded |
 | Compiler warnings | n/a | n/a | 0 |
-| Streaming (SSE) | no | no | next |
+| Streaming (SSE) | no | no | yes, as an Elixir `Stream` |
 
 The goal: SDKs good enough that an API company could ship them as its
 official Elixir SDK.
@@ -149,6 +154,21 @@ Req.Test.stub(OpenAI, &Req.Test.json(&1, %{"id" => "gpt-5.5", "object" => "model
 {:ok, %OpenAI.Schemas.Model{id: "gpt-5.5"}} = OpenAI.Models.retrieve("gpt-5.5")
 ```
 
+**Streaming**: an operation that can answer with Server-Sent Events gets a
+`_stream` variant that asks the API for a stream (it sends `stream: true`, or
+whatever that API uses) and returns a lazy `Stream` of decoded events:
+
+```elixir
+{:ok, events} = OpenAI.Responses.create_stream(model: "gpt-5.5", input: "Write a haiku")
+
+for %OpenAI.Schemas.ResponseTextDeltaEvent{delta: delta} <- events, do: IO.write(delta)
+```
+
+Failures before the first event (a 429, a bad request) come back as
+`{:error, %Infusion.Runtime.Error{}}` and are retried like any call; a stream
+that has started is never retried. Stopping early (`Enum.take/2`) closes the
+connection.
+
 **Telemetry**: `[:infusion, :request, :start | :stop | :exception]`.
 
 ## How it's built
@@ -168,7 +188,7 @@ OpenAPI 3.0 / 3.1 spec (JSON or YAML, any size)
 ```
 
 **`infusion_runtime`** is the small package every generated SDK depends on:
-HTTP (Req), auth, retries, encoding, decoding and errors. Keeping it out of
+HTTP (Req), auth, retries, encoding, decoding, streaming and errors. Keeping it out of
 the generated code means a fix there reaches every SDK, and generated code
 stays short and readable: each operation is a few lines of data plus a
 function that hands it to the runtime. More in [the design](docs/design.md).
@@ -180,7 +200,7 @@ function that hands it to the runtime. More in [the design](docs/design.md).
   * [x] One function per operation, with docs and typespecs
   * [x] Runtime: auth, JSON / form / multipart bodies, retries, typed errors, telemetry
   * [x] `mix infusion.gen` writes a complete Mix project
-  * [ ] Streaming (`text/event-stream`) as an Elixir `Stream`
+  * [x] Streaming (`text/event-stream`) as an Elixir `Stream`
   * [ ] Pagination as lazy streams (cursor, page, offset, `Link` header)
   * [ ] `infusion.exs`: rename modules and functions, declare pagination,
         patch the spec where it's wrong

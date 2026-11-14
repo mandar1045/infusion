@@ -15,7 +15,7 @@ defmodule Infusion.Runtime.Error do
   | `:unprocessable_entity` | 422 |
   | `:rate_limit` | 429 |
   | `:internal_server` | 500 and above |
-  | `:api_error` | any other status of 400 and above |
+  | `:api_error` | any other status of 400 and above, or an error event in a stream |
   | `:timeout` | no response in time |
   | `:connection` | the request could not be sent or the connection broke |
 
@@ -63,6 +63,16 @@ defmodule Infusion.Runtime.Error do
   end
 
   @doc false
+  # An error event inside a stream that had already started.
+  def from_stream(body) do
+    %__MODULE__{
+      type: :api_error,
+      message: detail(body) || "error event in the stream",
+      body: body
+    }
+  end
+
+  @doc false
   def from_exception(exception) do
     reason = Map.get(exception, :reason, exception)
 
@@ -86,17 +96,21 @@ defmodule Infusion.Runtime.Error do
 
   # APIs put the human-readable message in different places.
   defp message(status, body) do
-    detail =
-      case body do
-        %{"error" => %{"message" => m}} when is_binary(m) -> m
-        %{"error" => m} when is_binary(m) -> m
-        %{"message" => m} when is_binary(m) -> m
-        %{"errors" => [%{"message" => m} | _]} when is_binary(m) -> m
-        %{"detail" => m} when is_binary(m) -> m
-        m when is_binary(m) and m != "" and byte_size(m) < 500 -> m
-        _ -> nil
-      end
+    case detail(body) do
+      nil -> "HTTP #{status}"
+      detail -> "#{status}: #{detail}"
+    end
+  end
 
-    if detail, do: "#{status}: #{detail}", else: "HTTP #{status}"
+  defp detail(body) do
+    case body do
+      %{"error" => %{"message" => m}} when is_binary(m) -> m
+      %{"error" => m} when is_binary(m) -> m
+      %{"message" => m} when is_binary(m) -> m
+      %{"errors" => [%{"message" => m} | _]} when is_binary(m) -> m
+      %{"detail" => m} when is_binary(m) -> m
+      m when is_binary(m) and m != "" and byte_size(m) < 500 -> m
+      _ -> nil
+    end
   end
 end

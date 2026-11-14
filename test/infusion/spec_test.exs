@@ -60,10 +60,15 @@ defmodule Infusion.SpecTest do
           {"list.json", ~s([1, 2]), "the JSON is not an object"},
           {"broken.json", ~s({"openapi": ), "invalid JSON"}
         ] do
-      path = Path.join(dir, "infusion-#{name}")
+      path = Path.join(dir, "infusion-#{System.unique_integer([:positive])}-#{name}")
       File.write!(path, content)
-      assert {:error, msg} = Spec.load(path)
-      assert msg =~ expected, "#{name}: #{msg}"
+
+      try do
+        assert {:error, msg} = Spec.load(path)
+        assert msg =~ expected, "#{name}: #{msg}"
+      after
+        File.rm!(path)
+      end
     end
   end
 end
