@@ -7,7 +7,7 @@ defmodule Infusion.Runtime.Config do
       config :openai_sdk, api_key: System.fetch_env!("OPENAI_API_KEY"), max_retries: 5
 
       # one call
-      OpenAI.Models.list(%{}, timeout: 5_000, max_retries: 0)
+      OpenAI.Models.list(timeout: 5_000, max_retries: 0)
 
   Settings:
 

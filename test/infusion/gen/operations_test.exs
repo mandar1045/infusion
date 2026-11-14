@@ -386,7 +386,7 @@ defmodule Infusion.Gen.OperationsTest do
     end)
 
     assert {:ok, %{"ok" => true}} =
-             sdk("Adoptions").adopt(pet: "p1", metadata: %{source: "shelter"})
+             sdk("Adoptions").create(pet: "p1", metadata: %{source: "shelter"})
   end
 
   test "errors are typed and retried like the official SDKs" do
@@ -414,7 +414,7 @@ defmodule Infusion.Gen.OperationsTest do
       sse(conn, ~s(data: {"text":"woof"}\n\ndata: {"text":"woof!"}\n\n))
     end)
 
-    assert {:ok, stream} = sdk("Chat").with_pet_stream("p1", say: "hi")
+    assert {:ok, stream} = sdk("Pets").chat_stream("p1", say: "hi")
 
     assert [%{__struct__: PetStore.Schemas.Word, text: "woof"}, %{text: "woof!"}] =
              Enum.to_list(stream)
@@ -422,14 +422,14 @@ defmodule Infusion.Gen.OperationsTest do
     Req.Test.expect(__MODULE__, &Req.Test.json(&1, %{"id" => "p1", "name" => "Rex"}))
 
     assert {:ok, %{__struct__: PetStore.Schemas.Pet, name: "Rex"}} =
-             sdk("Chat").with_pet("p1", say: "hi")
+             sdk("Pets").chat("p1", say: "hi")
   end
 
   test "an operation that only streams returns the stream itself" do
     Req.Test.expect(__MODULE__, &sse(&1, ~s(data: {"text":"born"}\n\n)))
 
     assert [%{__struct__: PetStore.Schemas.Word, text: "born"}] =
-             sdk("Events").watch!() |> Enum.to_list()
+             sdk("Events").list!() |> Enum.to_list()
   end
 
   test "a list gets an _all function that reads every page" do

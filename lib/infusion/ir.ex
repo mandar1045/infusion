@@ -124,13 +124,16 @@ defmodule Infusion.IR do
         {name, %{schema(schema, "components.schemas.#{name}") | name: name}}
       end
 
+    paths = document["paths"] || %{}
+    collections = collections(Map.keys(paths))
+
     operations =
-      for {path, item} <- document["paths"] || %{},
+      for {path, item} <- paths,
           is_map(item),
           {method, op} <- item,
           method in @methods,
           is_map(op) do
-        operation(op, path, method, item)
+        operation(op, path, method, item, collections)
       end
       |> Enum.sort_by(&{&1.module, &1.function})
       |> disambiguate()
@@ -149,8 +152,9 @@ defmodule Infusion.IR do
 
   ## Operations
 
-  defp operation(op, path, method, item) do
-    name = Naming.operation(op, path, method)
+  defp operation(op, path, method, item, collections) do
+    methods = for {m, %{}} <- item, m in @methods, do: m
+    name = Naming.operation(op, path, method, methods: methods, collections: collections)
     where = "#{String.upcase(method)} #{path}"
     params = Enum.map((item["parameters"] || []) ++ (op["parameters"] || []), &param(&1, where))
     # An operation-level parameter replaces a path-level one with the same name and location.
@@ -177,6 +181,15 @@ defmodule Infusion.IR do
       streaming?: Enum.any?(responses, fn {_, r} -> r.streaming? end),
       deprecated?: op["deprecated"] == true
     }
+  end
+
+  # Paths with items under them: "/things" when "/things/{id}" exists.
+  defp collections(paths) do
+    for path <- paths,
+        segments = path |> Naming.path_only() |> String.split("/"),
+        String.starts_with?(List.last(segments), "{"),
+        into: MapSet.new(),
+        do: segments |> Enum.drop(-1) |> Enum.join("/")
   end
 
   defp param(p, where) do
@@ -302,8 +315,7 @@ defmodule Infusion.IR do
         key = {op.module, op.function}
 
         if MapSet.member?(seen, key) do
-          suffix = Naming.function_name(op.id || Atom.to_string(op.method))
-          renamed = %{op | function: "#{op.function}_#{suffix}"}
+          renamed = %{op | function: alternative_name(op, seen)}
 
           warn(
             "#{Enum.join(op.module, ".")}.#{op.function} is taken; #{String.upcase(to_string(op.method))} #{op.path} is #{renamed.function}"
@@ -316,6 +328,19 @@ defmodule Infusion.IR do
       end)
 
     ops
+  end
+
+  # The operation ID without the module's words (`listExternalStorageConfigurations`
+  # in `ExternalStorage` is `list_configurations`), else the name with the ID
+  # appended.
+  defp alternative_name(op, seen) do
+    id_name =
+      op.id && Naming.drop_module_words(Naming.function_name(op.id), List.last(op.module) || "")
+
+    suffixed = "#{op.function}_#{Naming.function_name(op.id || Atom.to_string(op.method))}"
+
+    Enum.find([id_name, suffixed], &(&1 && not MapSet.member?(seen, {op.module, &1}))) ||
+      "#{suffixed}_#{:erlang.phash2(op.path)}"
   end
 
   # How the API wants its credential: the first scheme the document requires,

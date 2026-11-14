@@ -116,6 +116,13 @@ custom one of the same name (`lib/openai/custom/responses.ex`) with `use`, so
 helpers like `OpenAI.Responses.stream_text/2` live in the same module as the
 generated functions.
 
+**Names** come from, in order: vendor SDK hints (Cloudflare's
+`x-fern-sdk-*`), the official SDK call in the spec's examples (OpenAI's
+`x-oaiMeta`), `group/action` operation IDs (GitHub), then the path, nested the
+way the official SDKs nest resources. The tag is the last resort. See
+`Infusion.Naming`; measured against the official OpenAI Python SDK, 83% of
+operations get the official name.
+
 **Functions.** Path parameters are positional. Query, header and body
 parameters are one map or keyword list; call options come last, so a body
 field named `timeout` never clashes with the `timeout:` option:
@@ -124,7 +131,7 @@ field named `timeout` never clashes with the `timeout:` option:
 GitHub.Repos.get("elixir-lang", "elixir")
 GitHub.Repos.list_for_org("elixir-lang", per_page: 100)                  # one page
 GitHub.Repos.list_for_org_all!("elixir-lang") |> Enum.take(250)           # every page, lazily
-OpenAI.Chat.create_completion(%{model: "gpt-5.5", messages: msgs}, timeout: 30_000, max_retries: 5)
+OpenAI.Chat.Completions.create(%{model: "gpt-5.5", messages: msgs}, timeout: 30_000, max_retries: 5)
 GitHub.Repos.get("elixir-lang", "elixir", raw: true)                      # {:ok, %Req.Response{body: %FullRepository{}}}
 ```
 

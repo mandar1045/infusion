@@ -86,10 +86,8 @@ defmodule Infusion.IRTest do
         "/v1/customers/" => %{"get" => %{"operationId" => "GetCustomersTrailing"}}
       })
 
-    assert ir.operations |> Enum.map(& &1.function) |> Enum.sort() == [
-             "list",
-             "list_get_customers_trailing"
-           ]
+    # The second one is named after its operation ID, minus the module's words.
+    assert ir.operations |> Enum.map(& &1.function) |> Enum.sort() == ["get_trailing", "list"]
 
     assert [warning] = ir.warnings
     assert warning =~ "Customers.list is taken"

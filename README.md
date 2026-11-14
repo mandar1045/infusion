@@ -19,7 +19,7 @@ Generated OpenAI in openai_sdk/: 388 operations, 2272 schemas, 2754 files (5828 
 
 ```elixir
 {:ok, completion} =
-  OpenAI.Chat.create_completion(
+  OpenAI.Chat.Completions.create(
     model: "gpt-5.5",
     messages: [%{role: "user", content: "Say hello"}]
   )
@@ -27,7 +27,7 @@ Generated OpenAI in openai_sdk/: 388 operations, 2272 schemas, 2754 files (5828 
 [%{message: %{content: text}}] = completion.choices
 
 # Streaming, as a plain Elixir Stream of typed events
-OpenAI.Chat.create_completion_stream!(model: "gpt-5.5", messages: messages)
+OpenAI.Chat.Completions.create_stream!(model: "gpt-5.5", messages: messages)
 |> Stream.flat_map(& &1.choices)
 |> Enum.each(&IO.write(&1.delta.content || ""))
 
@@ -126,7 +126,7 @@ keyword list, and options for the call come last:
 ```elixir
 OpenAI.Models.retrieve("gpt-5.5")
 OpenAI.Files.list(purpose: "batch", limit: 10)
-OpenAI.Chat.create_completion(%{model: "gpt-5.5", messages: msgs}, timeout: 30_000)
+OpenAI.Chat.Completions.create(%{model: "gpt-5.5", messages: msgs}, timeout: 30_000)
 
 OpenAI.Models.retrieve!("gpt-5.5")                     # raises Infusion.Runtime.Error
 OpenAI.Models.retrieve("gpt-5.5", raw: true)           # {:ok, %Req.Response{}}, for headers
@@ -136,6 +136,13 @@ OpenAI.request(:get, "/brand/new/endpoint", %{x: 1})   # anything the spec doesn
 Responses decode into structs. Fields the API added after the SDK was
 generated land in `__extra__` instead of disappearing, and parameters the SDK
 doesn't know about are still sent.
+
+**Names** follow the official SDKs. When a spec shows the official call in
+its examples, as OpenAI's does, Infusion uses it (`OpenAI.Chat.Completions.create`).
+Otherwise it names operations by their path, the way the official SDKs nest
+resources: `Twilio.Accounts.Messages.list`, `Stripe.Customers.search`. On
+OpenAI's spec that gives the official name for 83% of operations; most of the
+rest are renames OpenAI makes outside its spec.
 
 **Configuration** comes from the spec, then your config, then the call:
 
@@ -235,6 +242,7 @@ function that hands it to the runtime. More in [the design](docs/design.md).
   * [x] One function per operation, with docs and typespecs
   * [x] Runtime: auth, JSON / form / multipart bodies, retries, typed errors, telemetry
   * [x] `mix infusion.gen` writes a complete Mix project
+  * [x] Names that match the official SDKs where the spec allows
   * [x] Streaming (`text/event-stream`) as an Elixir `Stream`
   * [x] Pagination as lazy streams (cursor, page, offset, `Link` header)
   * [ ] `infusion.exs`: rename modules and functions, declare pagination,
@@ -250,7 +258,7 @@ function that hands it to the runtime. More in [the design](docs/design.md).
 Popular APIs whose Elixir clients are missing or stale (Hex, November 2026),
 all of which publish official OpenAPI specs:
 
-  * **GitHub**: no maintained SDK (the best option is 5.7 years old)
+  * **GitHub**: little choice; the existing clients are barely used
   * **Cloudflare**: no SDK
   * **Twilio**: the main client hasn't been released in 2.6 years, yet gets
     122k downloads per 90 days

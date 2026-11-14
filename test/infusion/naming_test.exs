@@ -72,26 +72,129 @@ defmodule Infusion.NamingTest do
     end
   end
 
-  test "tag + operation ID, without version prefixes or repeated words (Twilio, OpenAI)" do
+  test "the tag and operation ID, when the path names no resource" do
     assert %{module: ["RecordingTranscription"], function: "list", strategy: :tag} =
              name(
                %{
                  "tags" => ["Api20100401RecordingTranscription"],
                  "operationId" => "ListRecordingTranscription"
                },
-               "/x",
+               "/{id}",
                "get"
              )
 
     assert %{module: ["Chat"], function: "create_completion"} =
-             name(%{"tags" => ["Chat"], "operationId" => "createChatCompletion"}, "/x", "post")
+             name(%{"tags" => ["Chat"], "operationId" => "createChatCompletion"}, "/", "post")
+  end
 
-    assert %{module: ["FineTuning"], function: "list_job_checkpoints"} =
-             name(
-               %{"tags" => ["Fine-tuning"], "operationId" => "listFineTuningJobCheckpoints"},
-               "/x",
+  describe "the official SDK call in the examples (OpenAI's x-oaiMeta)" do
+    defp oai(python), do: %{"x-oaiMeta" => %{"examples" => %{"request" => %{"python" => python}}}}
+
+    test "module path and function from the call" do
+      assert name(
+               oai("client = OpenAI()\nclient.beta.assistants.list(limit=20)"),
+               "/assistants",
                "get"
-             )
+             ) ==
+               %{module: ["Beta", "Assistants"], function: "list", strategy: :official_example}
+    end
+
+    test "the last call is the one shown; response wrappers are dropped" do
+      python =
+        "page = client.chat.completions.list()\nclient.chat.completions.retrieve(completion_id)"
+
+      assert %{module: ["Chat", "Completions"], function: "retrieve"} =
+               name(oai(python), "/chat/completions/{completion_id}", "get")
+
+      assert %{module: ["Audio", "Speech"], function: "create"} =
+               name(
+                 oai("with openai.audio.speech.with_streaming_response.create(model=m) as r:"),
+                 "/audio/speech",
+                 "post"
+               )
+    end
+
+    test "JavaScript when there's no Python, and a beta flag in the path" do
+      op = %{
+        "x-oaiMeta" => %{
+          "examples" => [%{"request" => %{"javascript" => "await client.responses.cancel(id);"}}]
+        }
+      }
+
+      assert %{module: ["Beta", "Responses"], function: "cancel"} =
+               name(op, "/responses/{id}/cancel?beta=true", "post")
+    end
+
+    test "examples without a call fall back to the path" do
+      op = %{
+        "x-oaiMeta" => %{
+          "examples" => %{"request" => %{"curl" => "curl https://api.openai.com/v1/batches"}}
+        }
+      }
+
+      assert %{module: ["Batches"], function: "list", strategy: :path} =
+               name(op, "/batches", "get")
+    end
+  end
+
+  describe "path rules" do
+    test "a POST to a singular path creates, unless the path can also be read" do
+      assert %{module: ["Audio", "Speech"], function: "create"} =
+               Naming.operation(%{}, "/audio/speech", "post", methods: ["post"])
+
+      assert %{module: ["Organization", "SpendLimit"], function: "update"} =
+               Naming.operation(%{}, "/organization/spend_limit", "post",
+                 methods: ["get", "post", "delete"]
+               )
+    end
+
+    test "a verb ending the path is an action" do
+      assert %{module: ["FineTuning", "Alpha", "Graders"], function: "validate"} =
+               name(%{}, "/fine_tuning/alpha/graders/validate", "post")
+    end
+
+    test "a path with items under it is a collection, whatever its name" do
+      collections = MapSet.new(["/organization/external_storage"])
+
+      assert %{module: ["Organization", "ExternalStorage"], function: "list"} =
+               Naming.operation(%{}, "/organization/external_storage", "get",
+                 collections: collections
+               )
+    end
+
+    test "a named member of a collection is a function on it (Stripe search, Wikimedia streams)" do
+      assert %{module: ["Customers"], function: "search"} =
+               Naming.operation(%{}, "/v1/customers/search", "get",
+                 methods: ["get"],
+                 collections: MapSet.new(["/v1/customers"])
+               )
+
+      assert %{module: ["Stream"], function: "mediawiki_recentchange"} =
+               Naming.operation(%{}, "/v2/stream/mediawiki.recentchange", "get",
+                 methods: ["get"],
+                 collections: MapSet.new(["/v2/stream"])
+               )
+    end
+
+    test "a member with several methods is a collection of its own (Twilio)" do
+      context = [
+        methods: ["get", "post"],
+        collections: MapSet.new(["/2010-04-01/Accounts/{AccountSid}/IncomingPhoneNumbers"])
+      ]
+
+      path = "/2010-04-01/Accounts/{AccountSid}/IncomingPhoneNumbers/Local.json"
+
+      assert %{module: ["Accounts", "IncomingPhoneNumbers", "Local"], function: "list"} =
+               Naming.operation(%{}, path, "get", context)
+
+      assert %{module: ["Accounts", "IncomingPhoneNumbers", "Local"], function: "create"} =
+               Naming.operation(%{}, path, "post", context)
+    end
+
+    test "file extensions and version segments are not names (Twilio)" do
+      assert %{module: ["Accounts", "Calls"], function: "retrieve"} =
+               name(%{}, "/2010-04-01/Accounts/{AccountSid}/Calls/{Sid}.json", "get")
+    end
   end
 
   test "word splitting and case conversion" do

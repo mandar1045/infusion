@@ -188,17 +188,17 @@ defmodule Infusion.RealSpecsTest do
       })
     end)
 
-    chat = Module.concat(["OpenAI.Chat"])
+    chat = Module.concat(["OpenAI.Chat.Completions"])
 
     assert {:ok, response} =
-             chat.create_completion(
+             chat.create(
                [model: "gpt-5.5", messages: [%{role: "user", content: "Hello"}]],
                api_key: "sk-test",
                req_options: [plug: {Req.Test, __MODULE__}]
              )
 
     assert [%{message: %{content: "Hi"}}] = response.choices
-    IO.puts("  openai.json: OpenAI.Chat.create_completion/2 called end to end")
+    IO.puts("  openai.json: OpenAI.Chat.Completions.create/2 called end to end")
 
     Req.Test.stub(__MODULE__, fn conn ->
       {:ok, body, conn} = Plug.Conn.read_body(conn)
@@ -221,7 +221,7 @@ defmodule Infusion.RealSpecsTest do
     end)
 
     text =
-      chat.create_completion_stream!(
+      chat.create_stream!(
         [model: "gpt-5.5", messages: [%{role: "user", content: "Hello"}]],
         api_key: "sk-test",
         req_options: [plug: {Req.Test, __MODULE__}]
@@ -229,7 +229,7 @@ defmodule Infusion.RealSpecsTest do
       |> Enum.map_join(fn chunk -> hd(chunk.choices).delta.content end)
 
     assert text == "Hello"
-    IO.puts("  openai.json: OpenAI.Chat.create_completion_stream!/2 streamed end to end")
+    IO.puts("  openai.json: OpenAI.Chat.Completions.create_stream!/2 streamed end to end")
   end
 
   # A real chat completion decodes into the generated structs.
