@@ -13,7 +13,7 @@ defmodule Infusion.Runtime.Error do
   | `:not_found` | 404 |
   | `:conflict` | 409 |
   | `:unprocessable_entity` | 422 |
-  | `:rate_limit` | 429 |
+  | `:rate_limit` | 429, or any status with `x-ratelimit-remaining: 0` (GitHub sends 403) |
   | `:internal_server` | 500 and above |
   | `:api_error` | any other status of 400 and above, or an error event in a stream |
   | `:timeout` | no response in time |
@@ -53,7 +53,7 @@ defmodule Infusion.Runtime.Error do
   @doc false
   def from_response(status, body, headers, request_id) do
     %__MODULE__{
-      type: type(status),
+      type: if(rate_limited?(headers), do: :rate_limit, else: type(status)),
       status: status,
       message: message(status, body),
       body: body,
@@ -82,6 +82,14 @@ defmodule Infusion.Runtime.Error do
         if(reason == :timeout, do: "request timed out", else: Exception.message(exception)),
       reason: reason
     }
+  end
+
+  # GitHub answers 403, not 429, when the rate limit is used up.
+  defp rate_limited?(headers) do
+    headers
+    |> Map.get("x-ratelimit-remaining", [])
+    |> List.wrap()
+    |> Enum.member?("0")
   end
 
   defp type(400), do: :bad_request

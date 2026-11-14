@@ -166,6 +166,34 @@ defmodule Infusion.Gen.OperationsTest do
           }
         }
       },
+      "/toys" => %{
+        "get" => %{
+          "operationId" => "listToys",
+          "parameters" => [
+            %{"name" => "after", "in" => "query", "schema" => %{"type" => "string"}},
+            %{"name" => "limit", "in" => "query", "schema" => %{"type" => "integer"}}
+          ],
+          "responses" => %{
+            "200" => %{
+              "description" => "a page of toys",
+              "content" => %{
+                "application/json" => %{
+                  "schema" => %{
+                    "type" => "object",
+                    "properties" => %{
+                      "data" => %{
+                        "type" => "array",
+                        "items" => %{"$ref" => "#/components/schemas/Pet"}
+                      },
+                      "has_more" => %{"type" => "boolean"}
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
       "/events" => %{
         "get" => %{
           "operationId" => "watchEvents",
@@ -402,5 +430,40 @@ defmodule Infusion.Gen.OperationsTest do
 
     assert [%{__struct__: PetStore.Schemas.Word, text: "born"}] =
              sdk("Events").watch!() |> Enum.to_list()
+  end
+
+  test "a list gets an _all function that reads every page" do
+    test = self()
+
+    for {page, has_more} <- [{~w(t1 t2), true}, {~w(t3), false}] do
+      Req.Test.expect(__MODULE__, fn conn ->
+        send(test, {:query, conn.query_string})
+        Req.Test.json(conn, %{"data" => Enum.map(page, &%{"id" => &1}), "has_more" => has_more})
+      end)
+    end
+
+    assert {:ok, toys} = sdk("Toys").list_all(limit: 2)
+    assert Enum.map(toys, & &1.id) == ~w(t1 t2 t3)
+    assert_received {:query, "limit=2"}
+    assert_received {:query, "limit=2&after=t2"}
+  end
+
+  test "a list paged by a Link header follows it" do
+    Req.Test.expect(__MODULE__, fn conn ->
+      conn
+      |> Plug.Conn.put_resp_header(
+        "link",
+        ~s(<https://eu.pets.test/v2/pets?limit=1&page=2>; rel="next")
+      )
+      |> Req.Test.json([%{"id" => "p1"}])
+    end)
+
+    Req.Test.expect(__MODULE__, fn conn ->
+      assert conn.query_string == "limit=1&page=2"
+      Req.Test.json(conn, [%{"id" => "p2"}])
+    end)
+
+    assert [%{__struct__: PetStore.Schemas.Pet, id: "p1"}, %{id: "p2"}] =
+             sdk("Pets").list_all!(limit: 1) |> Enum.to_list()
   end
 end

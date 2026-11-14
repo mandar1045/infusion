@@ -113,8 +113,10 @@ defmodule Infusion.Runtime.Request do
   defp build(config, op, path_args, params, opts) do
     {query, headers, body} = split_params(op, params)
 
+    # `url` is a full URL to follow, such as the next page's.
     url =
-      (op[:server] || config.base_url || "") <> path(op.path, op[:path_params] || [], path_args)
+      op[:url] ||
+        (op[:server] || config.base_url || "") <> path(op.path, op[:path_params] || [], path_args)
 
     url =
       case Form.pairs(query, :repeat) do
@@ -134,6 +136,8 @@ defmodule Infusion.Runtime.Request do
     %{
       method: op.method,
       url: url <> auth_query,
+      # The URL without a credential in its query, for following relative links.
+      public_url: url,
       headers: headers,
       body: encode_body(op[:body], body, config),
       into: nil
@@ -300,6 +304,13 @@ defmodule Infusion.Runtime.Request do
     |> Req.merge(config.req_options)
     |> Req.request()
     |> read_unless_streaming()
+    |> case do
+      {:ok, response} ->
+        {:ok, Req.Response.put_private(response, :infusion_url, request.public_url)}
+
+      error ->
+        error
+    end
   end
 
   # A streamed request that didn't get an event stream back (an error, or

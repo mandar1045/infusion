@@ -6,7 +6,7 @@ OpenAPI spec.
 > **Status: early.** Nothing is on Hex yet. Infusion already generates
 > complete SDKs for OpenAI, Stripe, GitHub, Twilio and Cloudflare that
 > compile without a single warning, and the generated GitHub SDK makes live
-> API calls. Streaming works; pagination is next.
+> API calls. Streaming and pagination work; release prep is next.
 
 ```console
 $ mix infusion.gen https://raw.githubusercontent.com/openai/openai-openapi/main/openapi.yaml --name OpenAI
@@ -26,6 +26,10 @@ Generated OpenAI in openai_sdk/: 388 operations, 2272 schemas, 2754 files (5828 
 OpenAI.Chat.create_completion_stream!(model: "gpt-5.5", messages: messages)
 |> Stream.flat_map(& &1.choices)
 |> Enum.each(&IO.write(&1.delta.content || ""))
+
+# Every item of a list, across pages, fetched as you read
+GitHub.Repos.list_for_org_all!("elixir-lang", per_page: 100)
+|> Enum.map(& &1.name)
 
 # Typed structs in, typed errors out
 case GitHub.Repos.get("elixir-lang", "elixir") do
@@ -169,6 +173,20 @@ Failures before the first event (a 429, a bad request) come back as
 that has started is never retried. Stopping early (`Enum.take/2`) closes the
 connection.
 
+**Pagination**: a list operation gets an `_all` variant, a lazy stream of
+every item that fetches the next page only when you read that far:
+
+```elixir
+{:ok, files} = OpenAI.Files.list_all(purpose: "batch")
+files |> Stream.filter(&(&1.bytes > 1_000_000)) |> Enum.take(10)
+```
+
+Specs don't say how an API pages, so Infusion recognises the common styles:
+cursors (`after` with `has_more`, OpenAI and Stripe), returned cursors and
+tokens (Cloudflare, Stripe search), next-page URLs (Twilio), page numbers
+and GitHub's `Link` header, and offsets. Across the five specs that's 888
+list operations.
+
 **Telemetry**: `[:infusion, :request, :start | :stop | :exception]`.
 
 ## How it's built
@@ -188,7 +206,8 @@ OpenAPI 3.0 / 3.1 spec (JSON or YAML, any size)
 ```
 
 **`infusion_runtime`** is the small package every generated SDK depends on:
-HTTP (Req), auth, retries, encoding, decoding, streaming and errors. Keeping it out of
+HTTP (Req), auth, retries, encoding, decoding, streaming, pagination and
+errors. Keeping it out of
 the generated code means a fix there reaches every SDK, and generated code
 stays short and readable: each operation is a few lines of data plus a
 function that hands it to the runtime. More in [the design](docs/design.md).
@@ -201,7 +220,7 @@ function that hands it to the runtime. More in [the design](docs/design.md).
   * [x] Runtime: auth, JSON / form / multipart bodies, retries, typed errors, telemetry
   * [x] `mix infusion.gen` writes a complete Mix project
   * [x] Streaming (`text/event-stream`) as an Elixir `Stream`
-  * [ ] Pagination as lazy streams (cursor, page, offset, `Link` header)
+  * [x] Pagination as lazy streams (cursor, page, offset, `Link` header)
   * [ ] `infusion.exs`: rename modules and functions, declare pagination,
         patch the spec where it's wrong
   * [ ] Hand-written code that survives regeneration

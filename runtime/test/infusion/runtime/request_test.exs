@@ -203,6 +203,18 @@ defmodule Infusion.Runtime.RequestTest do
       refute_received {:slept, _}
     end
 
+    test "GitHub's 403 with no rate limit left is a rate limit" do
+      Req.Test.expect(__MODULE__, fn conn ->
+        conn
+        |> Plug.Conn.put_resp_header("x-ratelimit-remaining", "0")
+        |> Plug.Conn.put_status(403)
+        |> Req.Test.json(%{"message" => "API rate limit exceeded"})
+      end)
+
+      assert {:error, %Error{type: :rate_limit, status: 403}} =
+               Request.run(config(), @get_model, ["m"], [])
+    end
+
     test "4xx errors are not retried" do
       Req.Test.expect(__MODULE__, fn conn ->
         conn |> Plug.Conn.put_status(404) |> Req.Test.json(%{"message" => "Not Found"})

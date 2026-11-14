@@ -49,7 +49,7 @@ defmodule Infusion.Gen.SchemasTest do
     compile(files)
 
     pet =
-      Petstore.Schemas.Pet.decode(%{
+      Module.concat(["Petstore.Schemas.Pet"]).decode(%{
         "id" => 1,
         "kind" => "dog",
         "userId" => "u1",

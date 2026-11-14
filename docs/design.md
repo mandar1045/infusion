@@ -39,16 +39,22 @@ generated SDKs of OpenAI and Anthropic.
 ]
 ```
 
-Pagination styles found in the survey, each a declarative rule:
+Pagination styles found in the survey. The generator recognises them from
+each list operation's parameters and response (`Infusion.Gen.Pagination`);
+`infusion.exs` will be able to override what it finds.
 
-| Style | APIs | Rule |
-|---|---|---|
-| `cursor_after` | OpenAI, Stripe | send `after` / `starting_after` = last item's `id` while `has_more` |
-| `cursor` | Cloudflare | send `cursor` = `result_info.cursor` |
-| `page` | Cloudflare, GitHub | increment `page` until fewer than `per_page` items, or `total_pages` |
-| `offset` | Cloudflare | `offset += limit` |
-| `token` | Twilio | follow `meta.next_page_url` |
-| `link_header` | GitHub | follow `rel="next"` in the `Link` header |
+| Style | APIs | Recognised by | Next page |
+|---|---|---|---|
+| `cursor_after` | OpenAI, Stripe | `after` / `starting_after` + `has_more` | `after` = `last_id` or the last item's `id`, while `has_more` (backwards from `before` / `ending_before`) |
+| `cursor` | Cloudflare, Stripe search, OpenAI usage | a string `cursor` / `page` parameter + a `cursor` / `next_page` / `next` field | send that field back |
+| `next_url` | Twilio | a `next_page_uri` / `next_page_url` field | follow it (relative URLs too) |
+| `page` | GitHub, Cloudflare | an integer `page` | the `Link` header when sent, else `page + 1` until a page is empty, short, or past `total_pages` |
+| `offset` | Cloudflare | `offset` + `limit` | `offset += items` |
+| `link_header` | GitHub | other paging parameters (`per_page`, `after`) | `rel="next"` in the `Link` header |
+
+Measured: OpenAI 86 list operations, Stripe 133, GitHub 281, Twilio 60,
+Cloudflare 328. Every style stops on an empty page, so a wrong guess costs
+one extra request, never a loop.
 
 ## Pipeline
 
@@ -117,7 +123,7 @@ field named `timeout` never clashes with the `timeout:` option:
 ```elixir
 GitHub.Repos.get("elixir-lang", "elixir")
 GitHub.Repos.list_for_org("elixir-lang", per_page: 100)                  # one page
-GitHub.Repos.list_for_org_stream("elixir-lang") |> Enum.take(250)         # all pages, lazily (planned)
+GitHub.Repos.list_for_org_all!("elixir-lang") |> Enum.take(250)           # every page, lazily
 OpenAI.Chat.create_completion(%{model: "gpt-5.5", messages: msgs}, timeout: 30_000, max_retries: 5)
 GitHub.Repos.get("elixir-lang", "elixir", raw: true)                      # {:ok, %Req.Response{body: %FullRepository{}}}
 ```
@@ -182,7 +188,9 @@ The behaviour every SDK shares, built on Req:
     never after; `data: [DONE]` ends it; an error event inside the stream is
     raised. Operations that only stream return the stream from the plain
     function.
-  * pagination: the styles above, as lazy streams
+  * pagination: the styles above. A list operation gets `<name>_all`,
+    returning a lazy stream of every item that fetches pages as it is read;
+    the first page's error is returned, a later page's raised
   * errors: connection, timeout, and status errors with `type`
     (`:rate_limit`, `:not_found`, ...), body, headers and request ID
   * telemetry: `[:infusion, :request, :start | :stop | :exception]`

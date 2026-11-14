@@ -81,10 +81,13 @@ defmodule Infusion.Gen.Operations do
   ## Modules
 
   defp module_source(module, operations, base, ir, modules, default_server) do
+    # _stream and _all variants must not take the name of another operation.
+    taken = MapSet.new(operations, &safe(&1.function))
+
     functions =
       operations
       |> Enum.sort_by(& &1.function)
-      |> Enum.map_join("\n\n", &function_source(&1, base, ir, modules, default_server))
+      |> Enum.map_join("\n\n", &function_source(&1, base, ir, modules, default_server, taken))
 
     names =
       operations |> Enum.map(&safe(&1.function)) |> Enum.sort() |> Enum.map_join(", ", &"`#{&1}`")
@@ -99,13 +102,16 @@ defmodule Infusion.Gen.Operations do
     |> format()
   end
 
-  defp function_source(op, base, ir, modules, default_server) do
+  defp function_source(op, base, ir, modules, default_server, taken) do
     name = safe(op.function)
     path_vars = path_vars(op.path_params)
     params = params(op, ir)
     takes_params? = params != [] or op.body != nil
     response = response(op)
     stream = stream(op, ir)
+    paginate = if stream == nil, do: Infusion.Gen.Pagination.detect(op, ir)
+    stream_name = variant(name, "stream", taken)
+    all_name = variant(name, "all", taken)
 
     args = path_vars ++ if(takes_params?, do: ["params \\\\ %{}"], else: []) ++ ["opts \\\\ []"]
     call_params = if takes_params?, do: "params", else: "%{}"
@@ -147,60 +153,72 @@ defmodule Infusion.Gen.Operations do
     return = "{:ok, #{result_spec}} | {:error, Infusion.Runtime.Error.t()}"
 
     head = """
-    #{attribute} #{operation_literal(operation, response, stream, modules)}
+    #{attribute} #{operation_literal(operation, response, stream, paginate, modules)}
 
-    @doc #{doc(op, params, ir, stream)}
+    @doc #{doc(op, params, ir, stream, paginate, stream_name, all_name)}
     """
 
     stream_call = String.replace(call, ".__request__(", ".__stream__(")
-    stream_spec = "{:ok, Enumerable.t()} | {:error, Infusion.Runtime.Error.t()}"
+    all_call = String.replace(call, ".__request__(", ".__paginate__(")
+    enum_spec = "{:ok, Enumerable.t()} | {:error, Infusion.Runtime.Error.t()}"
     args = Enum.join(args, ", ")
 
-    cond do
-      # Only an event stream comes back: the function streams.
-      stream && response == nil ->
-        """
-        #{head}#{deprecated}@spec #{name}(#{spec_args}) :: #{stream_spec}
-        def #{name}(#{args}), do: #{stream_call}
+    # name, its result spec, the bang's spec, the call, and the doc (nil:
+    # the doc of the operation, given above)
+    defs =
+      cond do
+        # Only an event stream comes back: the function itself streams.
+        stream && response == nil ->
+          [{name, enum_spec, "Enumerable.t()", stream_call, nil}]
 
-        @doc #{lit("Like `#{name}/#{arity}`, but returns the stream or raises `Infusion.Runtime.Error`.")}
-        #{deprecated}@spec #{name}!(#{spec_args}) :: Enumerable.t()
-        def #{name}!(#{args}), do: Infusion.Runtime.Request.unwrap!(#{stream_call})
-        """
-
-      true ->
-        plain = """
-        #{head}#{deprecated}@spec #{name}(#{spec_args}) :: #{return}
-        def #{name}(#{args}), do: #{call}
-
-        @doc #{lit("Like `#{name}/#{arity}`, but returns the result or raises `Infusion.Runtime.Error`.")}
-        #{deprecated}@spec #{name}!(#{spec_args}) :: #{result_spec}
-        def #{name}!(#{args}), do: Infusion.Runtime.Request.unwrap!(#{call})
-        """
-
-        if stream do
+        stream ->
           event = Schemas.typespec(stream.schema, modules)
 
-          plain <>
-            """
+          [
+            {name, return, result_spec, call, nil},
+            {stream_name, enum_spec, "Enumerable.t()", stream_call,
+             "Like `#{name}/#{arity}`, but streams the response: returns a lazy stream of `#{event}` events.\n\nRead it in the process that called this; stopping early closes the connection. An error the API sends mid-stream is raised as `Infusion.Runtime.Error`."}
+          ]
 
-            @doc #{Source.doc("Like `#{name}/#{arity}`, but streams the response: returns a lazy stream of `#{event}` events.\n\nRead it in the process that called this; stopping early closes the connection. An error the API sends mid-stream is raised as `Infusion.Runtime.Error`.")}
-            #{deprecated}@spec #{name}_stream(#{spec_args}) :: #{stream_spec}
-            def #{name}_stream(#{args}), do: #{stream_call}
+        paginate ->
+          item = Schemas.typespec(paginate.item, modules)
 
-            @doc #{lit("Like `#{name}_stream/#{arity}`, but returns the stream or raises `Infusion.Runtime.Error`.")}
-            #{deprecated}@spec #{name}_stream!(#{spec_args}) :: Enumerable.t()
-            def #{name}_stream!(#{args}), do: Infusion.Runtime.Request.unwrap!(#{stream_call})
-            """
-        else
-          plain
-        end
-    end
+          [
+            {name, return, result_spec, call, nil},
+            {all_name, enum_spec, "Enumerable.t()", all_call,
+             "Like `#{name}/#{arity}`, but returns every item, from every page: a lazy stream of `#{item}` that fetches pages as it is read.\n\nThe first page is fetched right away, so its errors are returned; a later page that fails raises `Infusion.Runtime.Error`. Stopping early (`Enum.take/2`) fetches no more pages."}
+          ]
+
+        true ->
+          [{name, return, result_spec, call, nil}]
+      end
+
+    sources =
+      Enum.map(defs, fn {fun, spec, bang_spec, fun_call, fun_doc} ->
+        doc = if fun_doc, do: "@doc #{Source.doc(fun_doc)}\n", else: ""
+
+        """
+        #{doc}#{deprecated}@spec #{fun}(#{spec_args}) :: #{spec}
+        def #{fun}(#{args}), do: #{fun_call}
+
+        @doc #{lit("Like `#{fun}/#{arity}`, but returns the #{if spec == return, do: "result", else: "stream"} or raises `Infusion.Runtime.Error`.")}
+        #{deprecated}@spec #{fun}!(#{spec_args}) :: #{bang_spec}
+        def #{fun}!(#{args}), do: Infusion.Runtime.Request.unwrap!(#{fun_call})
+        """
+      end)
+
+    head <> Enum.join(sources, "\n")
+  end
+
+  # name_stream, name_all, unless another operation of the module has that name.
+  defp variant(name, suffix, taken) do
+    candidate = "#{name}_#{suffix}"
+    if MapSet.member?(taken, candidate), do: unique(candidate, taken), else: candidate
   end
 
   # The operation map, with the response type written as a descriptor
   # (module names in it are code, not strings).
-  defp operation_literal(operation, response, stream, modules) do
+  defp operation_literal(operation, response, stream, paginate, modules) do
     descriptor =
       case response do
         {:json, schema} -> Schemas.descriptor(schema, modules)
@@ -211,6 +229,24 @@ defmodule Infusion.Gen.Operations do
       if stream,
         do: [", stream_response: " <> Schemas.descriptor(stream.schema, modules)],
         else: []
+
+    paginate_literal =
+      if paginate do
+        rest =
+          paginate
+          |> Map.drop([:item])
+          |> Enum.reject(fn {_k, v} -> v == nil end)
+          |> Enum.sort()
+          |> Enum.map(fn {k, v} -> "#{k}: #{lit(v)}" end)
+
+        [
+          ", paginate: %{" <>
+            Enum.join(rest ++ ["item: " <> Schemas.descriptor(paginate.item, modules)], ", ") <>
+            "}"
+        ]
+      else
+        []
+      end
 
     fields =
       operation
@@ -225,7 +261,7 @@ defmodule Infusion.Gen.Operations do
 
     "%{" <>
       Enum.join(fields ++ ["response: #{descriptor}"], ", ") <>
-      Enum.join(stream_descriptor) <> "}"
+      Enum.join(stream_descriptor) <> Enum.join(paginate_literal) <> "}"
   end
 
   ## Parameters
@@ -352,7 +388,7 @@ defmodule Infusion.Gen.Operations do
 
   ## Docs
 
-  defp doc(op, params, ir, stream) do
+  defp doc(op, params, ir, stream, paginate, stream_name, all_name) do
     summary = String.trim(op.summary || "")
     description = String.trim(op.description || "")
     description = if description == summary, do: "", else: description
@@ -374,15 +410,16 @@ defmodule Infusion.Gen.Operations do
       "`#{op.method |> Atom.to_string() |> String.upcase()} #{op.path}`",
       section("Path parameters", path_docs),
       section("Parameters", param_docs),
-      stream_doc(op, stream)
+      stream_doc(op, stream, stream_name),
+      if(paginate, do: "To read every item across all pages, use `#{all_name}`.", else: "")
     ]
 
     sections |> Enum.reject(&(&1 == "")) |> Enum.join("\n\n") |> Source.doc()
   end
 
-  defp stream_doc(_op, nil), do: ""
+  defp stream_doc(_op, nil, _name), do: ""
 
-  defp stream_doc(op, %{param: param}) do
+  defp stream_doc(op, %{param: param}, stream_name) do
     asks =
       case param do
         {name, value} -> " It sends `#{name}: #{inspect(value)}` for you."
@@ -391,7 +428,7 @@ defmodule Infusion.Gen.Operations do
 
     if response(op) == nil,
       do: "Returns a lazy stream of events (Server-Sent Events).#{asks}",
-      else: "To stream the response as it is generated, use `#{safe(op.function)}_stream`.#{asks}"
+      else: "To stream the response as it is generated, use `#{stream_name}`.#{asks}"
   end
 
   defp section(_title, []), do: ""
