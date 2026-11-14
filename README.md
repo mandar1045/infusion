@@ -1,12 +1,16 @@
 # Infusion
 
+[![Hex.pm](https://img.shields.io/hexpm/v/infusion.svg)](https://hex.pm/packages/infusion)
+[![Docs](https://img.shields.io/badge/hex-docs-blue.svg)](https://hexdocs.pm/infusion)
+
 Infuse any API into Elixir: official-quality Elixir SDKs, generated from an
 OpenAPI spec.
 
-> **Status: early.** Nothing is on Hex yet. Infusion already generates
-> complete SDKs for OpenAI, Stripe, GitHub, Twilio and Cloudflare that
-> compile without a single warning, and the generated GitHub SDK makes live
-> API calls. Streaming and pagination work; release prep is next.
+> **Status: 0.1, early.** Infusion generates complete SDKs for OpenAI,
+> Stripe, GitHub, Twilio and Cloudflare that compile without a single
+> warning, with streaming and pagination. The generated GitHub SDK makes
+> live API calls; the others are tested against stubs so far. Feedback and
+> bug reports with the spec that broke it are very welcome.
 
 ```console
 $ mix infusion.gen https://raw.githubusercontent.com/openai/openai-openapi/main/openapi.yaml --name OpenAI
@@ -81,14 +85,25 @@ uploads, per-operation servers and server variables. See
 
 ## Try it
 
-Infusion isn't on Hex yet, so run it from a checkout:
+Add Infusion to any Mix project as a dev tool:
+
+```elixir
+def deps do
+  [{:infusion, "~> 0.1", only: :dev, runtime: false}]
+end
+```
+
+Then generate an SDK from a spec, by path or URL:
 
 ```console
-$ git clone https://github.com/mandar1045/infusion && cd infusion
 $ mix deps.get
-$ mix infusion.gen path/or/url/to/openapi.json --name GitHub --runtime-path runtime
+$ mix infusion.gen https://raw.githubusercontent.com/github/rest-api-description/main/descriptions/api.github.com/api.github.com.json --name GitHub
 $ cd github_sdk && mix deps.get && mix compile
 ```
+
+The generated SDK is its own Mix project, depending only on
+[`infusion_runtime`](https://hex.pm/packages/infusion_runtime). Use it from
+your app with a path dependency, or publish it.
 
 | Option | Default | |
 |---|---|---|
@@ -98,7 +113,7 @@ $ cd github_sdk && mix deps.get && mix compile
 | `--version` | `0.1.0` | the SDK's version |
 | `--license` | `Apache-2.0` | the SDK's license, for Hex |
 | `--env-var` | `<NAME>_API_KEY` | where the API key is read from |
-| `--runtime-path` | | depend on a local `infusion_runtime` (needed until it's on Hex) |
+| `--runtime-path` | | depend on a local `infusion_runtime` checkout instead of Hex |
 
 Anything in the spec Infusion can't represent is listed in
 `infusion_warnings.txt` instead of turning into broken code.
@@ -227,7 +242,8 @@ function that hands it to the runtime. More in [the design](docs/design.md).
   * [ ] Hand-written code that survives regeneration
   * [ ] A GitHub Action that regenerates an SDK when the vendor's spec
         changes and opens a pull request
-  * [ ] Publish `infusion`, `infusion_runtime` and the first SDKs on Hex
+  * [x] Publish `infusion` and `infusion_runtime` on Hex
+  * [ ] Publish the first generated SDKs on Hex
 
 ## First SDKs
 
