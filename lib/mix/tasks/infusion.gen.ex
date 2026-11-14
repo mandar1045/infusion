@@ -13,6 +13,7 @@ defmodule Mix.Tasks.Infusion.Gen do
     * `--out`: the directory to write to (default: `<name>_sdk`)
     * `--app`: the OTP app name (default: `<name>_sdk`)
     * `--version`: the SDK's version (default: `0.1.0`)
+    * `--license`: the SDK's license, for Hex (default: `Apache-2.0`)
     * `--env-var`: where the API key is read from (default: `<NAME>_API_KEY`)
     * `--runtime-path`: depend on a local `infusion_runtime` checkout
   """
@@ -24,6 +25,7 @@ defmodule Mix.Tasks.Infusion.Gen do
     out: :string,
     app: :string,
     version: :string,
+    license: :string,
     env_var: :string,
     runtime_path: :string
   ]
@@ -47,6 +49,7 @@ defmodule Mix.Tasks.Infusion.Gen do
       [name: name]
       |> put(:app, opts[:app] && String.to_atom(opts[:app]))
       |> put(:version, opts[:version])
+      |> put(:license, opts[:license])
       |> put(:env_var, opts[:env_var])
       |> put(
         :runtime_dep,

@@ -96,6 +96,7 @@ $ cd github_sdk && mix deps.get && mix compile
 | `--out` | `<name>_sdk` | where the project is written |
 | `--app` | `<name>_sdk` | the OTP app name |
 | `--version` | `0.1.0` | the SDK's version |
+| `--license` | `Apache-2.0` | the SDK's license, for Hex |
 | `--env-var` | `<NAME>_API_KEY` | where the API key is read from |
 | `--runtime-path` | | depend on a local `infusion_runtime` (needed until it's on Hex) |
 

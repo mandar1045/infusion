@@ -1,7 +1,7 @@
 defmodule Infusion.MixProject do
   use Mix.Project
 
-  @version "0.1.0-dev"
+  @version "0.1.0"
   @source_url "https://github.com/mandar1045/infusion"
 
   def project do
@@ -43,6 +43,10 @@ defmodule Infusion.MixProject do
   end
 
   defp docs do
-    [main: "readme", extras: ["README.md", "docs/design.md", "docs/spec-survey.md"]]
+    [
+      main: "readme",
+      source_ref: "v#{@version}",
+      extras: ["README.md", "docs/design.md", "docs/spec-survey.md", "CHANGELOG.md"]
+    ]
   end
 end

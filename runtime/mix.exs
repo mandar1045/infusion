@@ -1,7 +1,7 @@
 defmodule Infusion.Runtime.MixProject do
   use Mix.Project
 
-  @version "0.1.0-dev"
+  @version "0.1.0"
   @source_url "https://github.com/mandar1045/infusion"
 
   def project do
@@ -14,6 +14,7 @@ defmodule Infusion.Runtime.MixProject do
       description:
         "The runtime shared by SDKs generated with Infusion: HTTP, retries, streaming, pagination",
       package: package(),
+      docs: docs(),
       source_url: @source_url
     ]
   end
@@ -32,11 +33,20 @@ defmodule Infusion.Runtime.MixProject do
     ]
   end
 
+  # The runtime lives in runtime/ of the Infusion repository.
+  defp docs do
+    [
+      main: "readme",
+      extras: ["README.md", "CHANGELOG.md"],
+      source_url_pattern: "#{@source_url}/blob/v#{@version}/runtime/%{path}#L%{line}"
+    ]
+  end
+
   defp package do
     [
       licenses: ["Apache-2.0"],
       links: %{"GitHub" => @source_url},
-      files: ~w(lib mix.exs README.md LICENSE)
+      files: ~w(lib mix.exs README.md LICENSE CHANGELOG.md)
     ]
   end
 end
