@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.5.0
+
+SDKs that keep themselves up to date.
+
+  * Every generated SDK gets a GitHub workflow that, when its spec is a URL,
+    fetches the spec every day, regenerates the SDK, compiles it with
+    warnings as errors, runs its tests, and opens a pull request when
+    anything changed. Plus a CI workflow for pushes and pull requests
+  * Generated SDKs depend on `infusion` (dev only, pinned to the minor
+    version), so `mix infusion.gen --config infusion.exs` works in the SDK's
+    own directory, as its `infusion.exs` says
+  * `.infusion/manifest.json` records every generated file and its hash.
+    Regenerating deletes the files the new run doesn't generate (a schema
+    renamed or dropped from the spec), and stops, naming them, when
+    generated files were edited by hand (`--force` overwrites). Files
+    Infusion didn't generate are never touched. The first run in an SDK made
+    before 0.5 deletes nothing
+  * A `CHANGELOG.md` in `keep` goes into the generated docs
+
 ## 0.4.0
 
 Everything the first generated SDK, [Twilio](https://github.com/mandar1045/twilio),

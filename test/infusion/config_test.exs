@@ -315,6 +315,12 @@ defmodule Infusion.ConfigTest do
       assert users =~ "def get_by_name(opts \\\\ [])"
 
       assert files["mix.exs"] =~ ~s(description: "Shop's API from Elixir")
+      assert files["mix.exs"] =~ ~r/\{:infusion, "~> \d+\.\d+\.0", only: :dev, runtime: false\}/
+      assert files["mix.exs"] =~ ~s(extras: ["README.md"])
+
+      # A local spec can't be fetched again: CI, but no regeneration.
+      assert files[".github/workflows/ci.yml"] =~ "mix compile --warnings-as-errors"
+      refute Map.has_key?(files, ".github/workflows/regenerate.yml")
       assert files["mix.exs"] =~ ~s(links: %{"GitHub" => "https://github.com/x/shop"})
     end
 
@@ -363,6 +369,28 @@ defmodule Infusion.ConfigTest do
       {source, config} = Keyword.pop(config, :spec)
       assert {:ok, again} = Infusion.generate(source, config)
       assert Map.new(again.files, &{&1.path, &1.source}) == files
+    end
+
+    test "a spec at a URL gets a workflow that regenerates the SDK", %{ir: ir} do
+      files =
+        Infusion.Gen.Project.render(ir, "Shop", @doc_spec,
+          spec: "https://shop.test/openapi.json",
+          keep: ["README.md", "CHANGELOG.md"],
+          infusion_dep: ~s({:infusion, path: "/src/infusion")
+        )
+        |> Map.new(&{&1.path, &1.source})
+
+      workflow = files[".github/workflows/regenerate.yml"]
+      assert workflow =~ "schedule:"
+      assert workflow =~ "workflow_dispatch:"
+      assert workflow =~ "mix infusion.gen --config infusion.exs"
+      assert workflow =~ "peter-evans/create-pull-request@v7"
+      assert workflow =~ "Regenerate from https://shop.test/openapi.json"
+
+      assert files["mix.exs"] =~
+               ~s({:infusion, path: "/src/infusion", only: :dev, runtime: false})
+
+      assert files["mix.exs"] =~ ~s(extras: ["README.md", "CHANGELOG.md"])
     end
 
     test "returns config errors" do

@@ -89,7 +89,7 @@ Add Infusion to any Mix project as a dev tool:
 
 ```elixir
 def deps do
-  [{:infusion, "~> 0.4", only: :dev, runtime: false}]
+  [{:infusion, "~> 0.5", only: :dev, runtime: false}]
 end
 ```
 
@@ -169,6 +169,21 @@ take from the client, so the account becomes a setting and the calls read
   keep: ["README.md"]                     # hand-written, never overwritten
 ]
 ```
+
+### Keeping an SDK up to date
+
+A generated SDK regenerates itself. It depends on `infusion` (dev only), so
+`mix infusion.gen --config infusion.exs` works in its directory, and when its
+spec is a URL it comes with a GitHub workflow that fetches the spec every
+day, regenerates, compiles with warnings as errors, runs the tests, and opens
+a pull request when the API changed. [Twilio](https://github.com/mandar1045/twilio)
+works this way.
+
+Regenerating replaces what the last run generated, listed with hashes in
+`.infusion/manifest.json`, and deletes files the spec no longer needs.
+Your own files (tests, a hand-written README in `keep`) are never touched, and
+a generated file you edited by hand stops the run instead of being
+overwritten.
 
 ## Using a generated SDK
 
@@ -303,11 +318,12 @@ function that hands it to the runtime. More in [the design](docs/design.md).
   * [x] `infusion.exs`: rename modules and functions, auth, headers,
         pagination overrides; regenerate an SDK from its own config
   * [ ] Patch the spec where it's wrong, from `infusion.exs`
-  * [ ] Hand-written code that survives regeneration
-  * [ ] A GitHub Action that regenerates an SDK when the vendor's spec
+  * [ ] Hand-written code inside generated modules (`lib/<sdk>/custom/`)
+  * [x] A GitHub workflow that regenerates an SDK when the vendor's spec
         changes and opens a pull request
   * [x] Publish `infusion` and `infusion_runtime` on Hex
-  * [ ] Publish the first generated SDKs on Hex
+  * [x] Publish the first generated SDK on Hex: [twilio](https://hex.pm/packages/twilio)
+  * [ ] One SDK from several specs (Twilio's Verify, Messaging, ...)
 
 ## First SDKs
 

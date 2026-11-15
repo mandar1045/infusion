@@ -23,6 +23,14 @@ defmodule Mix.Tasks.Infusion.Gen do
     * `--license`: the SDK's license, for Hex (default: `Apache-2.0`)
     * `--env-var`: where the API key is read from (default: `<NAME>_API_KEY`)
     * `--runtime-path`: depend on a local `infusion_runtime` checkout
+    * `--infusion-path`: depend on a local `infusion` checkout (the SDK's
+      dev dependency, for regenerating itself)
+    * `--force`: overwrite generated files that were edited by hand
+
+  Regenerating an SDK replaces the files the last run generated, listed in
+  `.infusion/manifest.json`, and deletes those this run doesn't generate. A
+  generated file that was edited since stops the run (see
+  `Infusion.Manifest`); files Infusion didn't generate are never touched.
   """
 
   use Mix.Task
@@ -35,7 +43,9 @@ defmodule Mix.Tasks.Infusion.Gen do
     version: :string,
     license: :string,
     env_var: :string,
-    runtime_path: :string
+    runtime_path: :string,
+    infusion_path: :string,
+    force: :boolean
   ]
 
   @impl true
@@ -87,6 +97,10 @@ defmodule Mix.Tasks.Infusion.Gen do
         opts[:runtime_path] &&
           "{:infusion_runtime, path: #{inspect(Path.expand(opts[:runtime_path]))}}"
       )
+      |> put(
+        :infusion_dep,
+        opts[:infusion_path] && "{:infusion, path: #{inspect(Path.expand(opts[:infusion_path]))}"
+      )
 
     {micros, result} = :timer.tc(fn -> Infusion.generate(source, gen_opts) end)
 
@@ -107,13 +121,37 @@ defmodule Mix.Tasks.Infusion.Gen do
             f.path in kept and File.exists?(Path.join(out, f.path))
           end)
 
-        Infusion.write(files, out)
+        # infusion.exs and kept files are written once, then belong to the
+        # SDK's author: the manifest doesn't own them.
+        removed =
+          case Infusion.Manifest.write(files, out,
+                 untracked: ["infusion.exs" | kept],
+                 force: opts[:force] == true
+               ) do
+            {:ok, %{removed: removed}} ->
+              removed
+
+            {:error, {:edited, paths}} ->
+              Mix.raise(
+                "These generated files were edited by hand, and regenerating would " <>
+                  "overwrite or delete them:\n\n" <>
+                  Enum.map_join(paths, "\n", &"  #{&1}") <>
+                  "\n\nMove the changes to infusion.exs or a file of your own, or pass --force."
+              )
+          end
 
         Mix.shell().info(
           "Generated #{name} in #{out}/: #{length(ir.operations)} operations, " <>
             "#{map_size(ir.schemas)} schemas, #{length(files)} files " <>
             "(#{div(micros, 1000)} ms)"
         )
+
+        if removed != [] do
+          Mix.shell().info(
+            "Removed #{length(removed)} files the spec no longer needs:\n" <>
+              Enum.map_join(removed, "\n", &"  #{&1}")
+          )
+        end
 
         warnings_path = Path.join(out, "infusion_warnings.txt")
 
