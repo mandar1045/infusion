@@ -41,7 +41,17 @@ defmodule Infusion.Config do
     * `spec`: the spec's URL or path (relative to this file)
     * `out`: where to write the SDK (relative to this file; default
       `<name>_sdk` in the current directory)
-    * `app`, `version`, `license`, `env_var`: see `mix infusion.gen`
+    * `app`, `version`, `license`, `env_var`: see `mix infusion.gen`. For
+      basic auth from two variables, `env_var` can be a pair:
+      `{"TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN"}`
+    * `description`, `links`: the package's description and links in the
+      generated `mix.exs`: `links: %{"GitHub" => "https://github.com/..."}`
+    * `keep`: files that are yours once they exist, written only when
+      missing: `keep: ["README.md"]` for a hand-written README
+    * `schema_names`: `:full` (default) or `:last_segment`, which names a
+      dotted schema by its last part when no other schema has it:
+      Twilio's `api.v2010.account.message` becomes `Schemas.Message`, not
+      `Schemas.ApiV2010AccountMessage`
 
   ## Client settings
 
@@ -71,6 +81,20 @@ defmodule Infusion.Config do
   first. A name in either map that matches nothing is a warning, and two
   operations ending up with the same name is an error.
 
+  ## Path parameters from the client
+
+  `path_defaults` fills a path parameter from a client setting, so calls
+  don't take it. Twilio puts the account in every path
+  (`/2010-04-01/Accounts/{AccountSid}/Messages.json`), and its official
+  SDKs take it from the client:
+
+      path_defaults: %{"AccountSid" => {:account_sid, {:env, "TWILIO_ACCOUNT_SID"}}}
+
+  makes `Twilio.Messages.create(params)` read `account_sid` from
+  `config :twilio_sdk, account_sid: ...` (default: the environment
+  variable), and a call can still pass `account_sid: "AC..."`. A bare atom
+  (`"AccountSid" => :account_sid`) means no default.
+
   ## Pagination
 
   `pagination` maps an operation to `false` (no `_all` function) or to how
@@ -93,7 +117,19 @@ defmodule Infusion.Config do
   alias Infusion.IR
   alias Infusion.IR.Operation
 
-  @generator_keys [:name, :spec, :out, :app, :version, :license, :env_var]
+  @generator_keys [
+    :name,
+    :spec,
+    :out,
+    :app,
+    :version,
+    :license,
+    :description,
+    :links,
+    :keep,
+    :env_var,
+    :schema_names
+  ]
   @client_keys [
     :base_url,
     :auth,
@@ -105,7 +141,7 @@ defmodule Infusion.Config do
     :request_id_headers,
     :form_style
   ]
-  @naming_keys [:rename, :rename_modules, :pagination]
+  @naming_keys [:rename, :rename_modules, :path_defaults, :pagination]
   @keys @generator_keys ++ @client_keys ++ @naming_keys
 
   @styles [:cursor_after, :cursor, :next_url, :page, :offset, :link_header]
@@ -120,7 +156,14 @@ defmodule Infusion.Config do
   defaults. `auth` is left out (it goes through the IR, with the API key).
   """
   @spec client_defaults(keyword) :: keyword
-  def client_defaults(opts), do: Keyword.take(opts, @client_keys -- [:base_url, :auth])
+  def client_defaults(opts) do
+    # The defaults of settings that fill path parameters: account_sid: {:env, ...}
+    path_settings =
+      for {_name, {setting, default}} <- Enum.sort(opts[:path_defaults] || %{}),
+          do: {setting, default}
+
+    Keyword.take(opts, @client_keys -- [:base_url, :auth]) ++ path_settings
+  end
 
   @doc """
   Reads and checks an `infusion.exs` file. Relative `spec` and `out` paths
@@ -182,8 +225,45 @@ defmodule Infusion.Config do
   end
 
   defp check(key, value)
-       when key in [:spec, :out, :version, :license, :env_var, :base_url] and is_binary(value),
+       when key in [:spec, :out, :version, :license, :description, :env_var, :base_url] and
+              is_binary(value),
        do: :ok
+
+  defp check(:links, value) when is_map(value) do
+    if Enum.all?(value, fn {k, v} -> is_binary(k) and is_binary(v) end),
+      do: :ok,
+      else: expected(:links, ~s(a map of names to URLs, like %{"GitHub" => "https://..."}), value)
+  end
+
+  defp check(:keep, value) when is_list(value) do
+    if Enum.all?(value, &is_binary/1),
+      do: :ok,
+      else: expected(:keep, ~s(a list of paths, like ["README.md"]), value)
+  end
+
+  defp check(:env_var, {user, password}) when is_binary(user) and is_binary(password), do: :ok
+
+  defp check(:env_var, value),
+    do: expected(:env_var, ~s(a variable name, or a pair {"USER_VAR", "PASSWORD_VAR"}), value)
+
+  defp check(:schema_names, value) when value in [:full, :last_segment], do: :ok
+  defp check(:schema_names, value), do: expected(:schema_names, ":full or :last_segment", value)
+
+  defp check(:path_defaults, value) when is_map(value) do
+    Enum.find_value(value, :ok, fn
+      {name, setting}
+      when is_binary(name) and is_atom(setting) and setting not in [nil, true, false] ->
+        nil
+
+      {name, {setting, _default}}
+      when is_binary(name) and is_atom(setting) and setting not in [nil, true, false] ->
+        nil
+
+      {name, setting} ->
+        {:error,
+         "path_defaults: #{inspect(name)} => #{inspect(setting)}: give the path parameter's name and a setting, like \"AccountSid\" => :account_sid or {:account_sid, {:env, \"TWILIO_ACCOUNT_SID\"}}"}
+    end)
+  end
 
   defp check(key, value) when key in [:idempotency_header, :retry_count_header] do
     if is_binary(value) or value == nil, do: :ok, else: expected(key, "a header name", value)
@@ -277,7 +357,8 @@ defmodule Infusion.Config do
     expected(
       key,
       case key do
-        k when k in [:rename, :rename_modules, :pagination] -> "a map"
+        k when k in [:rename, :rename_modules, :pagination, :path_defaults, :links] -> "a map"
+        :keep -> "a list of paths"
         k when k in [:timeout, :max_retries] -> "a non-negative integer"
         :app -> "an atom, like :github_sdk"
         :form_style -> "an atom"
@@ -384,10 +465,12 @@ defmodule Infusion.Config do
       {renamed, module_warnings} = rename_modules(originals, opts[:rename_modules] || %{})
       {renamed, rename_warnings} = rename(renamed, opts[:rename] || %{})
 
+      {renamed, path_warnings} = path_defaults(renamed, opts[:path_defaults] || %{})
+
       with :ok <- check_collisions(renamed),
            {:ok, paged, pagination_warnings} <- paginate(renamed, opts[:pagination] || %{}, ir) do
         {:ok, %{ir | operations: Enum.map(paged, &elem(&1, 0))},
-         module_warnings ++ rename_warnings ++ pagination_warnings}
+         module_warnings ++ rename_warnings ++ path_warnings ++ pagination_warnings}
       end
     end
   end
@@ -453,6 +536,29 @@ defmodule Infusion.Config do
       end)
 
     {ops, unused("rename", Map.keys(renames), used, "no operation")}
+  end
+
+  # Path parameters the client fills leave the function's arguments.
+  defp path_defaults(ops, defaults) when defaults == %{}, do: {ops, []}
+
+  defp path_defaults(ops, defaults) do
+    {ops, used} =
+      Enum.map_reduce(ops, MapSet.new(), fn {op, keys}, used ->
+        {filled, kept} = Enum.split_with(op.path_params, &Map.has_key?(defaults, &1.name))
+
+        client =
+          Enum.map(filled, fn p ->
+            case defaults[p.name] do
+              {setting, _default} -> {p.name, setting}
+              setting -> {p.name, setting}
+            end
+          end)
+
+        op = %{op | path_params: kept, client_path_params: client}
+        {{op, keys}, Enum.into(Enum.map(filled, & &1.name), used)}
+      end)
+
+    {ops, unused("path_defaults", Map.keys(defaults), used, "no path parameter")}
   end
 
   defp unused(setting, names, used, what) do

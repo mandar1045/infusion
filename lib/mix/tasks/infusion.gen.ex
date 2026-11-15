@@ -99,6 +99,14 @@ defmodule Mix.Tasks.Infusion.Gen do
               Path.expand(config_path) == Path.expand(Path.join(out, "infusion.exs"))
           end)
 
+        # Files the SDK's author has made their own (`keep:`).
+        kept = config[:keep] || []
+
+        files =
+          Enum.reject(files, fn f ->
+            f.path in kept and File.exists?(Path.join(out, f.path))
+          end)
+
         Infusion.write(files, out)
 
         Mix.shell().info(

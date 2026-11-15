@@ -35,7 +35,9 @@ defmodule Infusion.IR do
       streaming?: false,
       deprecated?: false,
       # nil: detected by Infusion.Gen.Pagination; false or a setting: from infusion.exs
-      pagination: nil
+      pagination: nil,
+      # path parameters filled from a client setting, [{"AccountSid", :account_sid}]
+      client_path_params: []
     ]
   end
 
@@ -137,6 +139,7 @@ defmodule Infusion.IR do
           is_map(op) do
         operation(op, path, method, item, collections)
       end
+      |> lists_by_response(schemas)
       |> Enum.sort_by(&{&1.module, &1.function})
       |> disambiguate()
 
@@ -153,6 +156,25 @@ defmodule Infusion.IR do
   end
 
   ## Operations
+
+  # A read of a singular path that answers a page of a list (one that
+  # `Infusion.Gen.Pagination` knows how to page) lists: Twilio's
+  # `GET /AvailablePhoneNumbers/{CountryCode}/Local.json` is `Local.list`,
+  # as in the official SDKs, not `Local.retrieve`. Only names made from the
+  # path, and only when the module has no `list` already.
+  defp lists_by_response(operations, schemas) do
+    ir = %__MODULE__{schemas: schemas}
+    taken = MapSet.new(operations, &{&1.module, &1.function})
+
+    Enum.map(operations, fn op ->
+      if op.naming == :path and op.method == :get and op.function == "retrieve" and
+           not String.ends_with?(Naming.path_only(op.path), "}") and
+           not MapSet.member?(taken, {op.module, "list"}) and
+           Infusion.Gen.Pagination.detect(op, ir) != nil,
+         do: %{op | function: "list"},
+         else: op
+    end)
+  end
 
   defp operation(op, path, method, item, collections) do
     methods = for {m, %{}} <- item, m in @methods, do: m

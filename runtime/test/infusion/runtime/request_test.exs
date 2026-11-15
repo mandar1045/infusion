@@ -157,6 +157,55 @@ defmodule Infusion.Runtime.RequestTest do
       end
     end
 
+    test "basic auth from two environment variables, both needed" do
+      System.put_env("INFUSION_TEST_SID", "AC9")
+      System.put_env("INFUSION_TEST_TOKEN", "secret")
+      on_exit(fn -> System.delete_env("INFUSION_TEST_SID") end)
+      on_exit(fn -> System.delete_env("INFUSION_TEST_TOKEN") end)
+
+      Req.Test.expect(__MODULE__, 2, fn conn ->
+        send(self(), {:auth, Plug.Conn.get_req_header(conn, "authorization")})
+        Req.Test.json(conn, %{})
+      end)
+
+      key = {{:env, "INFUSION_TEST_SID"}, {:env, "INFUSION_TEST_TOKEN"}}
+      Request.run(config(auth: :basic, api_key: key), @get_model, ["m"], [])
+      assert_received {:auth, ["Basic " <> encoded]}
+      assert Base.decode64!(encoded) == "AC9:secret"
+
+      key = {{:env, "INFUSION_TEST_SID"}, {:env, "INFUSION_UNSET_VAR"}}
+      Request.run(config(auth: :basic, api_key: key), @get_model, ["m"], [])
+      assert_received {:auth, []}
+    end
+
+    test "path parameters can come from a setting, overridden per call" do
+      op = %{
+        id: "CreateMessage",
+        method: :post,
+        path: "/Accounts/{AccountSid}/Messages/{Sid}.json",
+        path_params: ["Sid"],
+        client_path_params: [{"AccountSid", :account_sid}],
+        params: [],
+        body: :form,
+        response: nil
+      }
+
+      Req.Test.expect(__MODULE__, 2, fn conn ->
+        send(self(), {:path, conn.request_path})
+        Req.Test.json(conn, %{})
+      end)
+
+      Request.run(config(account_sid: "AC1"), op, ["SM1"], [])
+      assert_received {:path, "/v1/Accounts/AC1/Messages/SM1.json"}
+
+      Request.run(config(account_sid: "AC1"), op, ["SM1"], [], account_sid: "AC2")
+      assert_received {:path, "/v1/Accounts/AC2/Messages/SM1.json"}
+
+      assert_raise ArgumentError, ~r/needs the :account_sid setting/, fn ->
+        Request.run(config(), op, ["SM1"], [])
+      end
+    end
+
     test "no credential, no auth header" do
       Req.Test.expect(__MODULE__, fn conn ->
         assert Plug.Conn.get_req_header(conn, "authorization") == []

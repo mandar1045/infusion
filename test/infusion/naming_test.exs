@@ -191,6 +191,27 @@ defmodule Infusion.NamingTest do
                Naming.operation(%{}, path, "post", context)
     end
 
+    test "a path with a file extension is the collection of its items (Twilio)" do
+      # /Calls/{CallSid}/Siprec/{Sid}.json makes /Calls/{CallSid}/Siprec a
+      # collection, which /Calls/{CallSid}/Siprec.json is.
+      context = [
+        methods: ["post"],
+        collections:
+          MapSet.new([
+            "/2010-04-01/Accounts/{AccountSid}/Calls",
+            "/2010-04-01/Accounts/{AccountSid}/Calls/{CallSid}/Siprec"
+          ])
+      ]
+
+      assert %{module: ["Accounts", "Calls", "Siprec"], function: "create"} =
+               Naming.operation(
+                 %{},
+                 "/2010-04-01/Accounts/{AccountSid}/Calls/{CallSid}/Siprec.json",
+                 "post",
+                 context
+               )
+    end
+
     test "file extensions and version segments are not names (Twilio)" do
       assert %{module: ["Accounts", "Calls"], function: "retrieve"} =
                name(%{}, "/2010-04-01/Accounts/{AccountSid}/Calls/{Sid}.json", "get")

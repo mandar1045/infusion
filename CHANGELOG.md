@@ -3,7 +3,27 @@
 ## 0.3.0
 
 `infusion.exs`: what the spec doesn't say, in one file next to the SDK. And
-structs for the responses that were still plain maps.
+structs for the responses that were still plain maps. Generated SDKs now
+need `infusion_runtime` 0.1.1.
+
+Everything the first Twilio SDK needed:
+
+  * `path_defaults`: a path parameter filled from a client setting instead
+    of an argument. Twilio's `{AccountSid}` is in every path; with
+    `path_defaults: %{"AccountSid" => {:account_sid, {:env, "TWILIO_ACCOUNT_SID"}}}`
+    the call is `Twilio.Messages.create(params)`, and `account_sid:` on a call
+    picks another account
+  * `env_var: {"TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN"}`: basic auth from
+    two environment variables
+  * `schema_names: :last_segment`: `api.v2010.account.message` is
+    `Twilio.Schemas.Message`, when no other schema ends the same way
+  * `keep: ["README.md"]`: files the SDK's author owns once they exist;
+    `description` and `links` for the generated `mix.exs`
+  * A `GET` of a singular path that answers a page of a list is `list`, not
+    `retrieve` (`Twilio.AvailablePhoneNumbers.Local.list("US")`); a path with
+    a file extension is the collection of its items
+    (`/Calls/{CallSid}/Siprec.json` is `Calls.Siprec.create`). Only Twilio's
+    names change among the five specs surveyed
 
   * Objects a spec writes inline in a response, a list of results, or an
     event stream are now structs named after the operation:

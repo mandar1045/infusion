@@ -135,6 +135,7 @@ defmodule Infusion.Gen.Operations do
         method: op.method,
         path: op.path,
         path_params: Enum.map(op.path_params, & &1.name),
+        client_path_params: if(op.client_path_params != [], do: op.client_path_params),
         params: params,
         body: body_type(op.body),
         server: if(server != default_server, do: server),
@@ -253,7 +254,7 @@ defmodule Infusion.Gen.Operations do
       |> Enum.reject(fn {_k, v} -> v == nil end)
       |> Enum.sort_by(fn {k, _} ->
         Enum.find_index(
-          ~w(id method path path_params params body content_type server stream_param)a,
+          ~w(id method path path_params client_path_params params body content_type server stream_param)a,
           &(&1 == k)
         )
       end)
@@ -395,6 +396,11 @@ defmodule Infusion.Gen.Operations do
 
     path_docs = Enum.map(op.path_params, &param_doc(safe(&1.field), &1.description, true))
 
+    client_docs =
+      for {name, setting} <- op.client_path_params do
+        "`{#{name}}` in the path is the `#{inspect(setting)}` setting; pass `#{setting}: \"...\"` as an option to use another."
+      end
+
     by_name = Map.new(op.query_params ++ op.header_params, &{&1.name, &1})
     fields = Map.new(body_fields(op.body, ir), &{&1.name, &1})
 
@@ -409,6 +415,7 @@ defmodule Infusion.Gen.Operations do
       description,
       "`#{op.method |> Atom.to_string() |> String.upcase()} #{op.path}`",
       section("Path parameters", path_docs),
+      Enum.join(client_docs, "\n\n"),
       section("Parameters", param_docs),
       stream_doc(op, stream, stream_name),
       if(paginate, do: "To read every item across all pages, use `#{all_name}`.", else: "")

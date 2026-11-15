@@ -28,6 +28,9 @@ defmodule Infusion.Runtime.Config do
     * `:user_agent`: the `user-agent` header
     * `:req_options`: passed to `Req.new/1` as is, e.g. `plug: {Req.Test, MyStub}`
     * `:sleep`: how to wait between retries, `fn ms -> ... end` (for tests)
+
+  Any other key is kept in `extra`, for settings an SDK defines itself, such
+  as Twilio's `:account_sid` (see `setting/2`).
   """
 
   @defaults [
@@ -52,7 +55,7 @@ defmodule Infusion.Runtime.Config do
     sleep: nil
   ]
 
-  defstruct @defaults
+  defstruct @defaults ++ [extra: %{}]
 
   @type t :: %__MODULE__{}
 
@@ -82,6 +85,9 @@ defmodule Infusion.Runtime.Config do
       {key, value}, acc when key in @keys ->
         Map.put(acc, key, value)
 
+      {key, value}, acc when is_atom(key) ->
+        %{acc | extra: Map.put(acc.extra, key, value)}
+
       _other, acc ->
         acc
     end)
@@ -98,7 +104,25 @@ defmodule Infusion.Runtime.Config do
   @doc false
   def credential(%__MODULE__{api_key: key}), do: resolve(key)
 
+  @doc """
+  The value of a setting the SDK defines itself (`:account_sid`), resolved
+  like the API key: `{:env, "VAR"}` and functions are read now.
+  """
+  @spec setting(t, atom) :: term
+  def setting(%__MODULE__{extra: extra}, key), do: resolve(Map.get(extra, key))
+
   defp resolve({:env, var}), do: System.get_env(var)
   defp resolve(fun) when is_function(fun, 0), do: resolve(fun.())
+
+  # Basic auth from two places: {{:env, "ACCOUNT_SID"}, {:env, "AUTH_TOKEN"}}.
+  # Missing either part is no credential at all.
+  defp resolve({user, password}) do
+    case {resolve(user), resolve(password)} do
+      {nil, _} -> nil
+      {_, nil} -> nil
+      pair -> pair
+    end
+  end
+
   defp resolve(value), do: value
 end

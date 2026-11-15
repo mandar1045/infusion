@@ -151,6 +151,25 @@ operations ending up with the same name is an error. Every SDK gets its own
 `infusion.exs`, so `mix infusion.gen --config github_sdk/infusion.exs`
 regenerates it in place. All settings are in `Infusion.Config`.
 
+Twilio's shows the rest. Every Twilio path starts with the account
+(`/2010-04-01/Accounts/{AccountSid}/Messages.json`), which the official SDKs
+take from the client, so the account becomes a setting and the calls read
+`Twilio.Messages.create(to: ..., body: ...)`:
+
+```elixir
+[
+  name: "Twilio",
+  spec: "https://raw.githubusercontent.com/twilio/twilio-oai/main/spec/json/twilio_api_v2010.json",
+  app: :twilio,
+  auth: :basic,
+  env_var: {"TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN"},
+  path_defaults: %{"AccountSid" => {:account_sid, {:env, "TWILIO_ACCOUNT_SID"}}},
+  schema_names: :last_segment,            # Schemas.Message, not Schemas.ApiV2010AccountMessage
+  rename_modules: %{"Accounts.Messages" => "Messages", "Accounts.Calls" => "Calls"},
+  keep: ["README.md"]                     # hand-written, never overwritten
+]
+```
+
 ## Using a generated SDK
 
 Path parameters are positional. Everything else the API takes is one map or

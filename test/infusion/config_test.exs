@@ -88,7 +88,13 @@ defmodule Infusion.ConfigTest do
                  max_retries: 3,
                  rename: %{"GET /user" => "Users.me", "x" => "get"},
                  rename_modules: %{"Apps" => "GitHub.Apps"},
-                 pagination: %{"a" => false, "b" => [style: :cursor, param: "c", from: "meta.c"]}
+                 pagination: %{"a" => false, "b" => [style: :cursor, param: "c", from: "meta.c"]},
+                 env_var: {"SID", "TOKEN"},
+                 path_defaults: %{"AccountSid" => {:account_sid, {:env, "SID"}}, "x" => :x},
+                 schema_names: :last_segment,
+                 description: "SDK",
+                 links: %{"GitHub" => "https://github.com/x/y"},
+                 keep: ["README.md"]
                )
     end
 
@@ -105,7 +111,13 @@ defmodule Infusion.ConfigTest do
             {[pagination: %{"x" => [style: :cursor, param: "c"]}], "needs :from"},
             {[pagination: %{"x" => [style: :page, size: "n"]}], "unknown :size"},
             {[pagination: %{"x" => true}], "give false or a keyword list"},
-            {%{name: "A"}, "must be a keyword list"}
+            {%{name: "A"}, "must be a keyword list"},
+            {[env_var: {"A", 1}], ":env_var must be a variable name, or a pair"},
+            {[schema_names: :short], ":schema_names must be :full or :last_segment"},
+            {[path_defaults: %{"AccountSid" => "account_sid"}], "path_defaults: \"AccountSid\""},
+            {[path_defaults: [x: 1]], ":path_defaults must be a map"},
+            {[keep: "README.md"], ":keep must be a list of paths"},
+            {[links: %{"GitHub" => 1}], ":links must be a map of names to URLs"}
           ] do
         assert {:error, error} = Config.validate(config)
         assert error =~ message, "#{inspect(config)}: #{error}"
@@ -256,7 +268,56 @@ defmodule Infusion.ConfigTest do
     end
   end
 
+  describe "path_defaults" do
+    test "takes path parameters out of the arguments, warns about unknown ones", %{ir: ir} do
+      assert {:ok, ir2, warnings} =
+               Config.apply(ir, path_defaults: %{"name" => {:user, {:env, "U"}}, "Nope" => :n})
+
+      op = Enum.find(ir2.operations, &(&1.id == "users/get-by-name"))
+      assert op.path_params == []
+      assert op.client_path_params == [{"name", :user}]
+      assert warnings == [~s(infusion.exs path_defaults: "Nope" matches no path parameter)]
+
+      # Operations without the parameter are left alone.
+      events = Enum.find(ir2.operations, &(&1.id == "listEndpointEvents"))
+      assert [%{name: "id"}] = events.path_params
+      assert events.client_path_params == []
+    end
+  end
+
   describe "Infusion.generate/2 with a config" do
+    @tag :tmp_dir
+    test "basic auth from two variables, path settings, package metadata", %{tmp_dir: dir} do
+      spec = Path.join(dir, "shop.json")
+      File.write!(spec, JSON.encode!(@doc_spec))
+
+      assert {:ok, result} =
+               Infusion.generate(spec,
+                 name: Shop,
+                 auth: :basic,
+                 env_var: {"SHOP_SID", "SHOP_TOKEN"},
+                 path_defaults: %{"name" => {:user_name, {:env, "SHOP_USER"}}},
+                 description: "Shop's API from Elixir",
+                 links: %{"GitHub" => "https://github.com/x/shop"}
+               )
+
+      files = Map.new(result.files, &{&1.path, &1.source})
+      client = files["lib/shop.ex"]
+      assert client =~ ~s(api_key: {{:env, "SHOP_SID"}, {:env, "SHOP_TOKEN"}})
+      assert client =~ ~s(user_name: {:env, "SHOP_USER"})
+      assert client =~ "read from `SHOP_SID` and `SHOP_TOKEN`"
+
+      assert client =~
+               "`:user_name` fills `{name}` in every path, read from `SHOP_USER` unless set"
+
+      users = files["lib/shop/users.ex"]
+      assert users =~ ~s(client_path_params: [{"name", :user_name}])
+      assert users =~ "def get_by_name(opts \\\\ [])"
+
+      assert files["mix.exs"] =~ ~s(description: "Shop's API from Elixir")
+      assert files["mix.exs"] =~ ~s(links: %{"GitHub" => "https://github.com/x/shop"})
+    end
+
     @tag :tmp_dir
     test "renames, client defaults, and an infusion.exs that loads back", %{tmp_dir: dir} do
       spec = Path.join(dir, "shop.json")

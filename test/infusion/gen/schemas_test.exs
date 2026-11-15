@@ -181,4 +181,43 @@ defmodule Infusion.Gen.SchemasTest do
     assert pet.source ==
              pet.source |> Code.format_string!() |> IO.iodata_to_binary() |> Kernel.<>("\n")
   end
+
+  test "schema_names: :last_segment shortens dotted names that stay unique" do
+    obj = %{"type" => "object", "properties" => %{"id" => %{"type" => "string"}}}
+
+    document = %{
+      "openapi" => "3.1.0",
+      "paths" => %{},
+      "components" => %{
+        "schemas" => %{
+          "api.v1.account.message" => obj,
+          "api.v1.account" => obj,
+          # Two dotted names ending the same way keep their whole names.
+          "api.v1.account.call.event" => obj,
+          "api.v1.account.conference.event" => obj,
+          # So does one whose short name a plain schema already has.
+          "api.v1.order" => obj,
+          "Order" => obj
+        }
+      }
+    }
+
+    {:ok, resolved} = Infusion.Ref.resolve(document)
+    {:ok, normalized, _} = Infusion.Normalize.run(resolved)
+    {:ok, ir} = Infusion.IR.build(normalized)
+
+    {_ir, modules} = Infusion.Gen.Schemas.prepare(ir, "Tw", schema_names: :last_segment)
+
+    assert modules == %{
+             "api.v1.account.message" => "Tw.Schemas.Message",
+             "api.v1.account" => "Tw.Schemas.Account",
+             "api.v1.account.call.event" => "Tw.Schemas.ApiV1AccountCallEvent",
+             "api.v1.account.conference.event" => "Tw.Schemas.ApiV1AccountConferenceEvent",
+             "api.v1.order" => "Tw.Schemas.ApiV1Order",
+             "Order" => "Tw.Schemas.Order"
+           }
+
+    {_ir, modules} = Infusion.Gen.Schemas.prepare(ir, "Tw")
+    assert modules["api.v1.account.message"] == "Tw.Schemas.ApiV1AccountMessage"
+  end
 end

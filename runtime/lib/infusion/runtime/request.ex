@@ -14,7 +14,9 @@ defmodule Infusion.Runtime.Request do
         params: [{:limit, "limit", :query}, {:organization, "OpenAI-Organization", :header}],
         body: nil | :json | :form | :multipart,
         response: Infusion.Runtime.Schema type | nil,
-        server: nil | "https://other.host"
+        server: nil | "https://other.host",
+        # path parameters taken from a setting instead of an argument
+        client_path_params: [{"AccountSid", :account_sid}]
       }
 
   Parameters are given as a map or keyword list. Known ones go where the
@@ -114,9 +116,12 @@ defmodule Infusion.Runtime.Request do
     {query, headers, body} = split_params(op, params)
 
     # `url` is a full URL to follow, such as the next page's.
+    {names, args} = client_path_params(config, op)
+
     url =
       op[:url] ||
-        (op[:server] || config.base_url || "") <> path(op.path, op[:path_params] || [], path_args)
+        (op[:server] || config.base_url || "") <>
+          path(op.path, names ++ (op[:path_params] || []), args ++ path_args)
 
     url =
       case Form.pairs(query, :repeat) do
@@ -146,6 +151,26 @@ defmodule Infusion.Runtime.Request do
 
   # Some paths carry a query already (OpenAI's "/responses?beta=true").
   defp separator(url), do: if(String.contains?(url, "?"), do: "&", else: "?")
+
+  # Path parameters every call shares, such as Twilio's account SID: read
+  # from a setting (`config :twilio_sdk, account_sid: ...`, or the call's
+  # `account_sid:` option).
+  defp client_path_params(config, op) do
+    op
+    |> Map.get(:client_path_params, [])
+    |> Enum.map(fn {name, setting} ->
+      case Config.setting(config, setting) do
+        nil ->
+          raise ArgumentError,
+                "#{op.path} needs the #{inspect(setting)} setting for {#{name}}: " <>
+                  "set it in your config or pass #{setting}: \"...\" to the call"
+
+        value ->
+          {name, value}
+      end
+    end)
+    |> Enum.unzip()
+  end
 
   defp path(template, names, args) when length(names) == length(args) do
     Enum.zip(names, args)

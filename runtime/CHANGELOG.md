@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.1.1
+
+What the Twilio SDK needs; nothing changes for existing SDKs.
+
+  * Path parameters filled from a setting (`client_path_params` in an
+    operation): Twilio's `{AccountSid}` comes from `config :twilio,
+    account_sid: ...` or a call's `account_sid:` option, and a missing one
+    raises an `ArgumentError` that says which setting to set
+  * Settings an SDK defines itself are kept in `Infusion.Runtime.Config`'s
+    `extra` and read with `Infusion.Runtime.Config.setting/2`, resolving
+    `{:env, "VAR"}` and functions like the API key
+  * Basic auth from two places: `api_key: {{:env, "SID"}, {:env, "TOKEN"}}`;
+    if either is unset, no credential is sent
+
 ## 0.1.0
 
 First release.

@@ -44,10 +44,14 @@ defmodule Infusion.Gen.Schemas do
   Returns the IR with those inline objects replaced by references, so every
   later step (operations, pagination) sees the same types, and the
   schema-name-to-module mapping.
+
+  Options: `schema_names: :last_segment` names a dotted schema
+  (`api.v2010.account.message`) by its last part (`Message`) when that is
+  unique; `:full` (the default) uses the whole name.
   """
-  @spec prepare(%IR{}, String.t()) :: {%IR{}, %{String.t() => String.t()}}
-  def prepare(%IR{schemas: schemas} = ir, base) do
-    modules = module_names(Map.keys(schemas), base)
+  @spec prepare(%IR{}, String.t(), keyword) :: {%IR{}, %{String.t() => String.t()}}
+  def prepare(%IR{schemas: schemas} = ir, base, opts \\ []) do
+    modules = module_names(Map.keys(schemas), base, opts[:schema_names] || :full)
     # The module mapping travels with the set of names taken, which would be
     # slow to rebuild for every inline object (Cloudflare has 15,000).
     names = {modules, MapSet.new(Map.values(modules))}
@@ -203,17 +207,38 @@ defmodule Infusion.Gen.Schemas do
 
   # Schema names to unique module names: "chat.completion" and
   # "ChatCompletion" would both be ChatCompletion; the later gets a suffix.
-  defp module_names(names, base) do
+  defp module_names(names, base, mode) do
+    short = if mode == :last_segment, do: short_names(names), else: %{}
+
     {map, _} =
       names
       |> Enum.sort()
       |> Enum.reduce({%{}, MapSet.new()}, fn name, {map, taken} ->
-        part = Naming.module_part(name)
+        part = Map.get_lazy(short, name, fn -> Naming.module_part(name) end)
         part = unique(part, taken, 2)
         {Map.put(map, name, "#{base}.Schemas.#{part}"), MapSet.put(taken, part)}
       end)
 
     map
+  end
+
+  # "api.v2010.account.message" -> "Message", for the dotted names whose last
+  # part no other schema (dotted or not) would also be called.
+  defp short_names(names) do
+    full = Map.new(names, &{&1, Naming.module_part(&1)})
+
+    candidates =
+      for name <- names, String.contains?(name, "."), into: %{} do
+        {name, name |> String.split(".") |> List.last() |> Naming.module_part()}
+      end
+
+    counts =
+      Enum.frequencies(
+        Map.values(candidates) ++
+          for({name, part} <- full, not Map.has_key?(candidates, name), do: part)
+      )
+
+    for {name, part} <- candidates, counts[part] == 1, into: %{}, do: {name, part}
   end
 
   defp unique(part, taken, n) do

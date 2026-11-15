@@ -122,11 +122,17 @@ defmodule Infusion.Naming do
   def rest_name(path, method, context \\ []) do
     methods = Keyword.get(context, :methods, [])
     collections = Keyword.get(context, :collections, MapSet.new())
-    collection? = MapSet.member?(collections, path_only(path))
+    # Twilio's `/Calls/{CallSid}/Siprec.json` is the collection of
+    # `/Calls/{CallSid}/Siprec/{Sid}.json`.
+    bare = path |> path_only() |> String.replace(~r/\.(json|xml|csv)\z/, "")
+
+    collection? =
+      MapSet.member?(collections, path_only(path)) or MapSet.member?(collections, bare)
+
     # A named member of a collection: `/v1/customers/search` next to
     # `/v1/customers/{id}`, or Wikimedia's `/v2/stream/mediawiki.recentchange`
     # next to `/v2/stream/{streams}`.
-    parent = path |> path_only() |> String.split("/") |> Enum.drop(-1) |> Enum.join("/")
+    parent = bare |> String.split("/") |> Enum.drop(-1) |> Enum.join("/")
     member? = MapSet.member?(collections, parent)
     # ...unless it supports several methods: then it's a collection of its own
     # (Twilio's `IncomingPhoneNumbers/Local.json`: list and create).

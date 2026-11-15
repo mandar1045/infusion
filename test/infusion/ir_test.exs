@@ -93,6 +93,59 @@ defmodule Infusion.IRTest do
     assert warning =~ "Customers.list is taken"
   end
 
+  test "a singular path that answers a page of a list lists (Twilio)" do
+    page = %{
+      "200" => %{
+        "description" => "ok",
+        "content" => %{
+          "application/json" => %{
+            "schema" => %{
+              "type" => "object",
+              "properties" => %{
+                "local" => %{"type" => "array", "items" => %{"type" => "string"}},
+                "next_page_uri" => %{"type" => "string"}
+              }
+            }
+          }
+        }
+      }
+    }
+
+    paging = [%{"name" => "PageSize", "in" => "query", "schema" => %{"type" => "integer"}}]
+
+    ir =
+      build(%{
+        "/AvailablePhoneNumbers/{CountryCode}/Local.json" => %{
+          "get" => %{"parameters" => paging, "responses" => page}
+        },
+        # A list that doesn't page stays a read.
+        "/Settings/Local.json" => %{
+          "get" => %{
+            "responses" => %{
+              "200" => %{
+                "description" => "ok",
+                "content" => %{
+                  "application/json" => %{
+                    "schema" => %{
+                      "type" => "object",
+                      "properties" => %{
+                        "local" => %{"type" => "array", "items" => %{"type" => "string"}}
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      })
+
+    assert ir.operations |> Enum.map(&{&1.module, &1.function}) |> Enum.sort() == [
+             {["AvailablePhoneNumbers", "Local"], "list"},
+             {["Settings", "Local"], "retrieve"}
+           ]
+  end
+
   describe "schemas are classified" do
     setup do
       ir =
