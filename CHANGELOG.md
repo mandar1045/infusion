@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.5.2
+## 0.5.2 (unreleased)
 
   * Regenerating never replaces a file Infusion didn't write: a new
     generated file at the path of a hand-written one (a resource added to
