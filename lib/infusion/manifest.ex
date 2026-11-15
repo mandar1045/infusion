@@ -18,7 +18,8 @@ defmodule Infusion.Manifest do
   whose content no longer matches its hash was edited by hand: the run stops
   and names it, rather than overwrite or delete the edit, unless `force: true`.
   Files that aren't in the manifest (hand-written tests, `lib/<sdk>/custom/`)
-  are never touched.
+  are never touched, and a new generated file that would replace one of them
+  stops the run the same way.
   """
 
   @path ".infusion/manifest.json"
@@ -68,6 +69,23 @@ defmodule Infusion.Manifest do
           # Rewriting a file with what is already there loses nothing.
           new[path] != hash(content),
           do: path
+
+    # A file this run would create where a file of the author's already is
+    # (a new resource named like their `custom/` module). Only once there is
+    # a manifest: in an SDK generated before manifests, every file is like that.
+    edited =
+      if old == %{} do
+        edited
+      else
+        taken =
+          for {path, hash} <- Enum.sort(new),
+              not Map.has_key?(old, path),
+              content = file(dir, path),
+              content != nil and hash(content) != hash,
+              do: path
+
+        Enum.sort(edited ++ taken)
+      end
 
     if edited != [] and not Keyword.get(opts, :force, false) do
       {:error, {:edited, edited}}

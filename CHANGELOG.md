@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.2
+
+  * Regenerating never replaces a file Infusion didn't write: a new
+    generated file at the path of a hand-written one (a resource added to
+    the spec, named like your `custom/` module) stops the run and names it
+
 ## 0.5.1
 
   * The regeneration workflow's pull request lists new and deleted files in

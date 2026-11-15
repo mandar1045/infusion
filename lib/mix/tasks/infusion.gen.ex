@@ -133,8 +133,8 @@ defmodule Mix.Tasks.Infusion.Gen do
 
             {:error, {:edited, paths}} ->
               Mix.raise(
-                "These generated files were edited by hand, and regenerating would " <>
-                  "overwrite or delete them:\n\n" <>
+                "Regenerating would overwrite or delete these files, which were edited " <>
+                  "by hand or aren't Infusion's:\n\n" <>
                   Enum.map_join(paths, "\n", &"  #{&1}") <>
                   "\n\nMove the changes to infusion.exs or a file of your own, or pass --force."
               )

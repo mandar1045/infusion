@@ -65,4 +65,19 @@ defmodule Infusion.ManifestTest do
     json = File.read!(Path.join(dir, ".infusion/manifest.json"))
     assert %{"generator" => "infusion " <> _, "files" => %{"lib/a.ex" => _}} = JSON.decode!(json)
   end
+
+  @tag :tmp_dir
+  test "a new generated file never replaces one of the author's", %{tmp_dir: dir} do
+    {:ok, _} = Manifest.write(files(%{"lib/a.ex" => "a"}), dir)
+    File.mkdir_p!(Path.join(dir, "lib/custom"))
+    File.write!(Path.join(dir, "lib/custom/webhook.ex"), "mine")
+
+    assert {:error, {:edited, ["lib/custom/webhook.ex"]}} =
+             Manifest.write(
+               files(%{"lib/a.ex" => "a", "lib/custom/webhook.ex" => "generated"}),
+               dir
+             )
+
+    assert File.read!(Path.join(dir, "lib/custom/webhook.ex")) == "mine"
+  end
 end
