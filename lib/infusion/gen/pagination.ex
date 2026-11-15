@@ -21,11 +21,26 @@ defmodule Infusion.Gen.Pagination do
   alias Infusion.IR
   alias Infusion.IR.{Operation, Schema}
 
-  @doc "The pagination of `op`, or nil if it doesn't page."
+  @doc """
+  The pagination of `op`, or nil if it doesn't page. A setting from
+  `infusion.exs` (`op.pagination`) wins over what the spec suggests.
+  """
   @spec detect(%Operation{}, %IR{}) :: map | nil
+  def detect(%Operation{pagination: false}, _ir), do: nil
+
+  def detect(%Operation{pagination: %{} = setting} = op, %IR{} = ir) do
+    {items, item} =
+      case setting do
+        %{items: path} -> {path, item_at(success_schema(op), path, ir)}
+        _ -> items(op, ir) || {[], %Schema{kind: :any}}
+      end
+
+    setting |> Map.put(:items, items) |> Map.put(:item, item)
+  end
+
   def detect(%Operation{method: :get} = op, %IR{} = ir) do
     with %Schema{} = response <- success_schema(op),
-         {items, item} <- items(resolve(response, ir), ir),
+         {items, item} <- list_in(resolve(response, ir), ir),
          style when style != nil <- style(op, resolve(response, ir), ir) do
       Map.merge(style, %{items: items, item: item})
     else
@@ -34,6 +49,41 @@ defmodule Infusion.Gen.Pagination do
   end
 
   def detect(_op, _ir), do: nil
+
+  @doc """
+  Where the items of `op`'s response are and their type, `{path, item}`, or
+  nil when the response has no list Infusion can find.
+  """
+  @spec items(%Operation{}, %IR{}) :: {[String.t()], %Schema{}} | nil
+  def items(%Operation{} = op, %IR{} = ir) do
+    case success_schema(op) do
+      %Schema{} = response -> list_in(resolve(response, ir), ir)
+      nil -> nil
+    end
+  end
+
+  # The item type of the list at `path` (given in infusion.exs); any value
+  # when the spec doesn't describe it.
+  defp item_at(schema, path, ir) do
+    found =
+      Enum.reduce_while(path, schema && resolve(schema, ir), fn key, acc ->
+        case acc do
+          %Schema{kind: :object, fields: fields} ->
+            case Enum.find(fields, &(&1.name == key)) do
+              nil -> {:halt, nil}
+              field -> {:cont, resolve(field.schema, ir)}
+            end
+
+          _ ->
+            {:halt, nil}
+        end
+      end)
+
+    case found do
+      %Schema{kind: :array, items: item} -> item
+      _ -> %Schema{kind: :any}
+    end
+  end
 
   defp success_schema(%Operation{responses: responses}) do
     responses
@@ -44,9 +94,9 @@ defmodule Infusion.Gen.Pagination do
 
   # Where the items are: the response itself when it is a list (GitHub),
   # else its list field (data, result, items, or the only list there is).
-  defp items(%Schema{kind: :array, items: item}, _ir), do: {[], item}
+  defp list_in(%Schema{kind: :array, items: item}, _ir), do: {[], item}
 
-  defp items(%Schema{kind: :object, fields: fields}, ir) do
+  defp list_in(%Schema{kind: :object, fields: fields}, ir) do
     lists =
       for f <- fields,
           %Schema{kind: :array, items: item} <- [resolve(f.schema, ir)],
@@ -63,7 +113,7 @@ defmodule Infusion.Gen.Pagination do
 
   # A union of lists (GitHub's starred repositories, with or without the
   # star's timestamp): the items are a union of the item types.
-  defp items(%Schema{kind: :union, variants: variants}, ir) do
+  defp list_in(%Schema{kind: :union, variants: variants}, ir) do
     item_types =
       Enum.map(variants, fn v ->
         case resolve(v, ir) do
@@ -77,7 +127,7 @@ defmodule Infusion.Gen.Pagination do
       else: nil
   end
 
-  defp items(_schema, _ir), do: nil
+  defp list_in(_schema, _ir), do: nil
 
   defp style(op, response, ir) do
     query = MapSet.new(op.query_params, & &1.name)

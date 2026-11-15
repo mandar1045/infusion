@@ -114,9 +114,42 @@ your app with a path dependency, or publish it.
 | `--license` | `Apache-2.0` | the SDK's license, for Hex |
 | `--env-var` | `<NAME>_API_KEY` | where the API key is read from |
 | `--runtime-path` | | depend on a local `infusion_runtime` checkout instead of Hex |
+| `--config` | `./infusion.exs` | read settings from a config file (flags win) |
 
 Anything in the spec Infusion can't represent is listed in
 `infusion_warnings.txt` instead of turning into broken code.
+
+### `infusion.exs`
+
+Specs leave things out: GitHub's doesn't say how to authenticate, none say
+how lists page, and the official SDKs use names that aren't in the spec.
+Put those in an `infusion.exs`, instead of editing generated code:
+
+```elixir
+[
+  name: "GitHub",
+  spec: "https://raw.githubusercontent.com/github/rest-api-description/main/descriptions/api.github.com/api.github.com.json",
+  auth: :bearer,
+  env_var: "GITHUB_TOKEN",
+  headers: [{"x-github-api-version", "2022-11-28"}],
+  rename: %{
+    "GET /user" => "Users.me",
+    "repos/list-for-authenticated-user" => "Repos.list_mine"
+  },
+  rename_modules: %{"Apps" => "GitHubApps"},
+  pagination: %{"Repos.list_for_org" => [style: :page, per_page: "per_page"]}
+]
+```
+
+```console
+$ mix infusion.gen --config infusion.exs
+```
+
+Operations can be named by method and path, operation ID, or the name
+Infusion gave them. A rename that matches nothing is a warning, and two
+operations ending up with the same name is an error. Every SDK gets its own
+`infusion.exs`, so `mix infusion.gen --config github_sdk/infusion.exs`
+regenerates it in place. All settings are in `Infusion.Config`.
 
 ## Using a generated SDK
 
@@ -245,8 +278,9 @@ function that hands it to the runtime. More in [the design](docs/design.md).
   * [x] Names that match the official SDKs where the spec allows
   * [x] Streaming (`text/event-stream`) as an Elixir `Stream`
   * [x] Pagination as lazy streams (cursor, page, offset, `Link` header)
-  * [ ] `infusion.exs`: rename modules and functions, declare pagination,
-        patch the spec where it's wrong
+  * [x] `infusion.exs`: rename modules and functions, auth, headers,
+        pagination overrides; regenerate an SDK from its own config
+  * [ ] Patch the spec where it's wrong, from `infusion.exs`
   * [ ] Hand-written code that survives regeneration
   * [ ] A GitHub Action that regenerates an SDK when the vendor's spec
         changes and opens a pull request

@@ -6,10 +6,17 @@ defmodule Mix.Tasks.Infusion.Gen do
 
       $ mix infusion.gen https://example.com/openapi.yaml --name Example
       $ mix infusion.gen openapi.json --name GitHub --out github_sdk --app github_sdk
+      $ mix infusion.gen --config infusion.exs
 
-  Options:
+  The SDK gets an `infusion.exs` with the settings it was generated with, so
+  `mix infusion.gen --config github_sdk/infusion.exs` regenerates it in place.
+  Renames, auth, headers and pagination overrides go in that file: see
+  `Infusion.Config`. With no arguments, `./infusion.exs` is used if there is one.
 
-    * `--name` (required): the base module, e.g. `OpenAI`
+  Options (they win over the config file):
+
+    * `--config`: an `infusion.exs` file
+    * `--name` (required, here or in the config): the base module, e.g. `OpenAI`
     * `--out`: the directory to write to (default: `<name>_sdk`)
     * `--app`: the OTP app name (default: `<name>_sdk`)
     * `--version`: the SDK's version (default: `0.1.0`)
@@ -21,6 +28,7 @@ defmodule Mix.Tasks.Infusion.Gen do
   use Mix.Task
 
   @switches [
+    config: :string,
     name: :string,
     out: :string,
     app: :string,
@@ -34,19 +42,42 @@ defmodule Mix.Tasks.Infusion.Gen do
   def run(args) do
     {opts, sources, _} = OptionParser.parse(args, strict: @switches)
 
-    source =
-      case sources do
-        [source] -> source
-        _ -> Mix.raise("Usage: mix infusion.gen SPEC --name Module")
+    config_path =
+      opts[:config] || if(sources == [] and File.regular?("infusion.exs"), do: "infusion.exs")
+
+    config =
+      case config_path && Infusion.Config.load(config_path) do
+        nil -> []
+        {:ok, config} -> config
+        {:error, message} -> Mix.raise(message)
       end
 
-    name = opts[:name] || Mix.raise("--name is required, e.g. --name OpenAI")
+    source =
+      case {sources, config[:spec]} do
+        {[source], _} ->
+          source
+
+        {[], spec} when is_binary(spec) ->
+          spec
+
+        _ ->
+          Mix.raise(
+            "Usage: mix infusion.gen SPEC --name Module, or mix infusion.gen --config infusion.exs"
+          )
+      end
+
+    name =
+      opts[:name] || (config[:name] && to_string(inspect_name(config[:name]))) ||
+        Mix.raise("--name is required, e.g. --name OpenAI")
+
     snake = Infusion.Naming.package(name)
-    out = opts[:out] || snake <> "_sdk"
+    out = opts[:out] || config[:out] || snake <> "_sdk"
     Application.ensure_all_started(:req)
 
     gen_opts =
-      [name: name]
+      config
+      |> Keyword.drop([:spec])
+      |> Keyword.merge(name: name, out: out)
       |> put(:app, opts[:app] && String.to_atom(opts[:app]))
       |> put(:version, opts[:version])
       |> put(:license, opts[:license])
@@ -61,6 +92,13 @@ defmodule Mix.Tasks.Infusion.Gen do
 
     case result do
       {:ok, %{files: files, warnings: warnings, ir: ir}} ->
+        # The config this run read is the SDK's own: keep it as written.
+        files =
+          Enum.reject(files, fn f ->
+            f.path == "infusion.exs" and config_path != nil and
+              Path.expand(config_path) == Path.expand(Path.join(out, "infusion.exs"))
+          end)
+
         Infusion.write(files, out)
 
         Mix.shell().info(
@@ -69,16 +107,27 @@ defmodule Mix.Tasks.Infusion.Gen do
             "(#{div(micros, 1000)} ms)"
         )
 
+        warnings_path = Path.join(out, "infusion_warnings.txt")
+
         if warnings != [] do
-          path = Path.join(out, "infusion_warnings.txt")
-          File.write!(path, Enum.map_join(warnings, "\n", &warning/1) <> "\n")
-          Mix.shell().info("#{length(warnings)} warnings, see #{path}")
+          File.write!(warnings_path, Enum.map_join(warnings, "\n", &warning/1) <> "\n")
+
+          for w <- warnings, is_binary(w), String.starts_with?(w, "infusion.exs") do
+            Mix.shell().info([:yellow, "warning: ", :reset, w])
+          end
+
+          Mix.shell().info("#{length(warnings)} warnings, see #{warnings_path}")
+        else
+          File.rm(warnings_path)
         end
 
       {:error, message} ->
         Mix.raise(message)
     end
   end
+
+  defp inspect_name(name) when is_atom(name), do: inspect(name)
+  defp inspect_name(name), do: name
 
   defp warning(%{path: path, message: message}), do: "#{path}: #{message}"
   defp warning(message), do: to_string(message)

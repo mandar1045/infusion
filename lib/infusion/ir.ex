@@ -33,7 +33,9 @@ defmodule Infusion.IR do
       cookie_params: [],
       responses: %{},
       streaming?: false,
-      deprecated?: false
+      deprecated?: false,
+      # nil: detected by Infusion.Gen.Pagination; false or a setting: from infusion.exs
+      pagination: nil
     ]
   end
 

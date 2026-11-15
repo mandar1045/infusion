@@ -20,6 +20,10 @@ defmodule Infusion.Gen.Project do
     * `:env_var`: where the API key is read from (default `OPENAI_API_KEY`)
     * `:runtime_dep`: the `infusion_runtime` dependency as code (default
       `{:infusion_runtime, "~> 0.1.0"}`), e.g. a `path:` dependency
+    * `:spec`, `:out`: where the spec is and where the SDK goes, for the
+      generated `infusion.exs`
+    * the client settings of `Infusion.Config` (`headers`, `timeout`, ...),
+      which become the client's defaults
   """
   @spec render(%IR{}, String.t(), map, keyword) :: [Infusion.Gen.Schemas.file()]
   def render(%IR{} = ir, base, document, opts \\ []) do
@@ -38,8 +42,9 @@ defmodule Infusion.Gen.Project do
       %{
         module: base,
         path: "lib/#{snake}.ex",
-        source: client(ir, base, app, version, env_var, title, info)
+        source: client(ir, base, app, version, env_var, title, info, opts)
       },
+      %{module: nil, path: "infusion.exs", source: infusion_exs(base, app, env_var, opts)},
       %{
         module: nil,
         path: "mix.exs",
@@ -67,14 +72,14 @@ defmodule Infusion.Gen.Project do
     ]
   end
 
-  defp client(ir, base, app, version, env_var, title, info) do
+  defp client(ir, base, app, version, env_var, title, info, opts) do
     defaults =
-      [
-        base_url: Operations.server_url(List.first(ir.servers)),
-        api_key: if(ir.auth, do: {:env, env_var}),
-        auth: ir.auth,
-        user_agent: "#{app}/#{version} (Elixir; infusion_runtime)"
-      ]
+      ([
+         base_url: Operations.server_url(List.first(ir.servers)),
+         api_key: if(ir.auth, do: {:env, env_var}),
+         auth: ir.auth,
+         user_agent: "#{app}/#{version} (Elixir; infusion_runtime)"
+       ] ++ Infusion.Config.client_defaults(opts))
       |> Enum.reject(fn {_k, v} -> v == nil end)
 
     """
@@ -215,6 +220,38 @@ defmodule Infusion.Gen.Project do
     #{length(ir.operations)} operations, #{map_size(ir.schemas)} schemas.
     """
     |> String.replace(~r/\n{3,}/, "\n\n")
+  end
+
+  # The settings this SDK was generated with, so it can be regenerated from
+  # its own directory: `mix infusion.gen --config infusion.exs`.
+  defp infusion_exs(base, app, env_var, opts) do
+    given = Keyword.take(opts, Infusion.Config.keys())
+
+    settings =
+      [name: base, spec: spec_path(opts[:spec], opts[:out]), out: ".", app: app, env_var: env_var]
+      |> Keyword.merge(Keyword.drop(given, [:name, :spec, :out, :app, :env_var]))
+      |> Enum.reject(fn {_k, v} -> v == nil end)
+      |> Enum.sort_by(fn {k, _} -> Enum.find_index(Infusion.Config.keys(), &(&1 == k)) end)
+
+    """
+    # How this SDK is generated. Regenerate it, from this directory, with
+    #
+    #     mix infusion.gen --config infusion.exs
+    #
+    # Every setting is described in Infusion.Config.
+    #{lit(settings)}
+    """
+    |> format()
+  end
+
+  defp spec_path(nil, _out), do: nil
+
+  defp spec_path(spec, out) do
+    cond do
+      String.starts_with?(spec, ["http://", "https://"]) -> spec
+      out -> Path.relative_to(Path.expand(spec), Path.expand(out), force: true)
+      true -> Path.expand(spec)
+    end
   end
 
   defp lit(term), do: Source.lit(term)

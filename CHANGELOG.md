@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+`infusion.exs`: what the spec doesn't say, in one file next to the SDK.
+
+  * `mix infusion.gen --config infusion.exs` (or no arguments, when
+    `./infusion.exs` exists); command-line flags win over the file
+  * `rename` an operation to `"Module.function"` and `rename_modules` a
+    module with everything under it. Operations are picked by `"GET /path"`,
+    operation ID, or generated name. Names that match nothing are warnings;
+    two operations with one name is an error
+  * Client defaults: `base_url` (for specs without servers), `auth`,
+    `headers`, `timeout`, `max_retries`, `idempotency_header`, and more
+  * `pagination` per operation: `false`, or a style with its parameters and
+    where the items are, for lists Infusion can't work out itself
+  * Every generated SDK gets an `infusion.exs` with the settings it was made
+    with; regenerating from it rewrites the SDK in place and keeps the file
+    as you edited it
+
 ## 0.2.0
 
 Names that match the official SDKs. This renames generated functions, so

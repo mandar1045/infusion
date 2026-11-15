@@ -14,34 +14,30 @@ generated SDKs of OpenAI and Anthropic.
 ```elixir
 # infusion.exs for the GitHub SDK
 [
-  module: GitHub,
+  name: "GitHub",
   app: :github_sdk,
   spec: "https://raw.githubusercontent.com/github/rest-api-description/main/descriptions/api.github.com/api.github.com.json",
 
   base_url: "https://api.github.com",
-  auth: [bearer: [env: "GITHUB_TOKEN"]],
+  auth: :bearer,
+  env_var: "GITHUB_TOKEN",
   headers: [{"x-github-api-version", "2022-11-28"}],
 
-  # Pagination styles, matched to operations by the parameters they take.
-  pagination: [
-    link_header: [when: [:per_page, :page]]
-  ],
+  # How operations become modules and functions: picked by "GET /path",
+  # operation ID, or the generated name.
+  rename: %{"repos/list-for-authenticated-user" => "Repos.list_mine"},
+  rename_modules: %{"Apps" => "GitHubApps"},
 
-  # How operations become modules and functions.
-  naming: [
-    group_by: :tag,                                  # GitHub.Repos, GitHub.Issues
-    function: {:operation_id, split: "/"},            # "repos/get" -> get
-    rename: %{"repos/list-for-authenticated-user" => {GitHub.Repos, :list_mine}}
-  ],
-
-  # Fixes for mistakes in the vendor's spec, applied before generation.
-  patches: []
+  # Pagination, where the detected style is wrong or missing.
+  pagination: %{"Repos.list_for_org" => [style: :page, per_page: "per_page"]}
 ]
 ```
 
+Implemented in `Infusion.Config` (spec patches are still to come).
+
 Pagination styles found in the survey. The generator recognises them from
 each list operation's parameters and response (`Infusion.Gen.Pagination`);
-`infusion.exs` will be able to override what it finds.
+`infusion.exs` can override what it finds.
 
 | Style | APIs | Recognised by | Next page |
 |---|---|---|---|
