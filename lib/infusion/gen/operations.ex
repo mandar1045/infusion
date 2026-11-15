@@ -28,7 +28,7 @@ defmodule Infusion.Gen.Operations do
 
   @doc """
   Renders the operations of `ir` under `base` (`"OpenAI"`), with `modules`
-  the schema-name-to-module mapping from `Infusion.Gen.Schemas.render/2`.
+  the schema-name-to-module mapping, both from `Infusion.Gen.Schemas.prepare/2`.
   """
   @spec render(%IR{}, String.t(), %{String.t() => String.t()}) :: [Schemas.file()]
   def render(%IR{} = ir, base, modules) do

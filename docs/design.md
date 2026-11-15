@@ -161,6 +161,14 @@ reaches endpoints the spec doesn't describe.
   * **Objects** become structs. Unknown fields from newer API versions are
     kept in `__extra__`, not dropped. Each struct records which fields were
     present, so `nil` from `null` can be told apart from a missing field.
+  * **Inline objects** (written in place, without a schema name) are structs
+    too, named after where they appear: a field's object is nested under its
+    parent (`ChatCompletion.Choice`), and an operation's response, list item
+    or stream event is named after the operation (Stripe's
+    `CustomersListResponse`, GitHub's `ActionsListArtifactsForRepoResponse`;
+    list items get `ResponseItem`, stream events `Event`). Only objects
+    without any fields stay maps. Across the five specs surveyed, 2,132
+    operations answer an inline object.
   * **Enums** stay strings, with the known values in the typespec: an API
     adding a value must not crash an older SDK.
   * **Unions with a discriminator** decode by the tag.

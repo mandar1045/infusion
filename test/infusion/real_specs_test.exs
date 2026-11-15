@@ -145,26 +145,68 @@ defmodule Infusion.RealSpecsTest do
           path
         end
 
-      {compile_ms, compiled} =
-        timed(fn -> Kernel.ParallelCompiler.compile(paths, return_diagnostics: true) end)
-
-      assert {:ok, modules, %{compile_warnings: warnings}} = compiled, "#{name} did not compile"
+      # A VM never frees the slot of a module it loaded once, and holds at
+      # most 65,536: Cloudflare's SDK (~29,000 modules with the Inspect
+      # implementations) compiles in a VM of its own, as it would for a user.
+      {compile_ms, {sdk_modules, warnings}} =
+        timed(fn ->
+          if length(files) > 10_000, do: compile_apart(dir), else: compile_here(paths, name)
+        end)
 
       IO.puts(
         "  #{name}: #{length(result.ir.operations)} operations, #{length(files)} modules " <>
           "generated in #{gen_ms} ms, compiled in #{compile_ms} ms, #{length(warnings)} warnings"
       )
 
-      # The compiler also returns the Inspect implementations @derive creates.
-      sdk_modules =
-        Enum.reject(modules, &String.starts_with?(Atom.to_string(&1), "Elixir.Inspect."))
-
-      assert length(sdk_modules) == length(files)
+      assert sdk_modules == length(files)
       assert warnings == [], inspect(Enum.take(warnings, 3), pretty: true)
     after
       File.rm_rf!(dir)
     end
   end
+
+  # {modules compiled, warnings}. The compiler also returns the Inspect
+  # implementations @derive creates, which aren't files of the SDK.
+  defp compile_here(paths, name) do
+    compiled = Kernel.ParallelCompiler.compile(paths, return_diagnostics: true)
+    assert {:ok, modules, %{compile_warnings: warnings}} = compiled, "#{name} did not compile"
+    {Enum.count(modules, &(not inspect_impl?(&1))), warnings}
+  end
+
+  defp compile_apart(dir) do
+    script = ~S"""
+    [dir] = System.argv()
+    paths = Path.wildcard(Path.join(dir, "**/*.ex"))
+
+    case Kernel.ParallelCompiler.compile(paths, return_diagnostics: true) do
+      {:ok, modules, %{compile_warnings: warnings}} ->
+        n = Enum.count(modules, &(not String.starts_with?(Atom.to_string(&1), "Elixir.Inspect.")))
+        IO.puts("RESULT #{n} #{Base.encode64(:erlang.term_to_binary(warnings))}")
+
+      {:error, errors, _} ->
+        IO.puts("FAILED #{inspect(Enum.take(errors, 3))}")
+    end
+    """
+
+    # The child sees the same compiled dependencies (infusion_runtime, Req).
+    paths =
+      :code.get_path()
+      |> Enum.map(&to_string/1)
+      |> Enum.filter(&String.contains?(&1, "_build"))
+      |> Enum.flat_map(&["-pa", &1])
+
+    {out, _status} = System.cmd("elixir", paths ++ ["-e", script, dir])
+
+    case Regex.run(~r/^RESULT (\d+) (\S+)$/m, out) do
+      [_, n, warnings] ->
+        {String.to_integer(n), warnings |> Base.decode64!() |> :erlang.binary_to_term()}
+
+      nil ->
+        flunk("did not compile: " <> String.slice(out, -2000, 2000))
+    end
+  end
+
+  defp inspect_impl?(module), do: String.starts_with?(Atom.to_string(module), "Elixir.Inspect.")
 
   # The generated function, the runtime and Req, against a stub of the API.
   defp call_chat_completion! do

@@ -194,6 +194,70 @@ defmodule Infusion.Gen.OperationsTest do
           }
         }
       },
+      "/toys/{toyId}/sounds" => %{
+        "get" => %{
+          "operationId" => "listToySounds",
+          "parameters" => [
+            %{
+              "name" => "toyId",
+              "in" => "path",
+              "required" => true,
+              "schema" => %{"type" => "string"}
+            },
+            %{"name" => "page", "in" => "query", "schema" => %{"type" => "integer"}}
+          ],
+          "responses" => %{
+            "200" => %{
+              "description" => "sounds, written inline",
+              "content" => %{
+                "application/json" => %{
+                  "schema" => %{
+                    "type" => "array",
+                    "items" => %{
+                      "type" => "object",
+                      "description" => "A sound the toy makes.",
+                      "properties" => %{
+                        "sound" => %{"type" => "string"},
+                        "loudness" => %{
+                          "type" => "object",
+                          "properties" => %{"db" => %{"type" => "number"}}
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "/toys/{toyId}/song" => %{
+        "get" => %{
+          "operationId" => "singToySong",
+          "tags" => ["Songs"],
+          "parameters" => [
+            %{
+              "name" => "toyId",
+              "in" => "path",
+              "required" => true,
+              "schema" => %{"type" => "string"}
+            }
+          ],
+          "responses" => %{
+            "200" => %{
+              "description" => "notes, written inline",
+              "content" => %{
+                "text/event-stream" => %{
+                  "schema" => %{
+                    "type" => "object",
+                    "properties" => %{"note" => %{"type" => "string"}}
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
       "/events" => %{
         "get" => %{
           "operationId" => "watchEvents",
@@ -465,5 +529,59 @@ defmodule Infusion.Gen.OperationsTest do
 
     assert [%{__struct__: PetStore.Schemas.Pet, id: "p1"}, %{id: "p2"}] =
              sdk("Pets").list_all!(limit: 1) |> Enum.to_list()
+  end
+
+  test "inline response objects are structs named after the operation", %{result: result} do
+    paths = Enum.map(result.files, & &1.path)
+
+    for path <-
+          ~w(toys_list_response.ex toys_sounds_list_response_item.ex loudness.ex toys_song_retrieve_event.ex) do
+      assert Enum.any?(paths, &String.ends_with?(&1, "/schemas/" <> path)), path
+    end
+
+    # An object without fields stays a map.
+    refute Enum.any?(paths, &String.contains?(&1, "adoptions_create_response"))
+
+    toys = Enum.find(result.files, &(&1.path == "lib/petstore/toys.ex")).source
+    assert toys =~ "{:ok, PetStore.Schemas.ToysListResponse.t()}"
+
+    Req.Test.expect(
+      __MODULE__,
+      &Req.Test.json(&1, %{"data" => [%{"id" => "t1"}], "has_more" => false})
+    )
+
+    assert {:ok,
+            %{
+              __struct__: PetStore.Schemas.ToysListResponse,
+              has_more: false,
+              data: [%{__struct__: PetStore.Schemas.Pet, id: "t1"}]
+            }} = sdk("Toys").list()
+  end
+
+  test "inline list items decode as structs, page after page" do
+    for {query, sounds} <- [{"", ["beep"]}, {"page=2", []}] do
+      Req.Test.expect(__MODULE__, fn conn ->
+        assert conn.query_string == query
+        Req.Test.json(conn, Enum.map(sounds, &%{"sound" => &1, "loudness" => %{"db" => 60}}))
+      end)
+    end
+
+    assert [
+             %{
+               __struct__: PetStore.Schemas.ToysSoundsListResponseItem,
+               sound: "beep",
+               loudness: %{
+                 __struct__: PetStore.Schemas.ToysSoundsListResponseItem.Loudness,
+                 db: 60
+               }
+             }
+           ] = sdk("Toys.Sounds").list_all!("t1") |> Enum.to_list()
+  end
+
+  test "inline stream events decode as structs" do
+    Req.Test.expect(__MODULE__, &sse(&1, ~s(data: {"note":"do"}\n\n)))
+
+    assert [%{__struct__: PetStore.Schemas.ToysSongRetrieveEvent, note: "do"}] =
+             sdk("Toys.Song").retrieve!("t1") |> Enum.to_list()
   end
 end

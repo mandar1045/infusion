@@ -89,7 +89,7 @@ Add Infusion to any Mix project as a dev tool:
 
 ```elixir
 def deps do
-  [{:infusion, "~> 0.1", only: :dev, runtime: false}]
+  [{:infusion, "~> 0.3", only: :dev, runtime: false}]
 end
 ```
 
@@ -166,9 +166,12 @@ OpenAI.Models.retrieve("gpt-5.5", raw: true)           # {:ok, %Req.Response{}},
 OpenAI.request(:get, "/brand/new/endpoint", %{x: 1})   # anything the spec doesn't describe yet
 ```
 
-Responses decode into structs. Fields the API added after the SDK was
-generated land in `__extra__` instead of disappearing, and parameters the SDK
-doesn't know about are still sent.
+Responses decode into structs, including objects the spec writes inline
+rather than as a named schema: Stripe's list pages come back as
+`%Stripe.Schemas.CustomersListResponse{data: [%Stripe.Schemas.Customer{}]}`,
+not a plain map. Fields the API added after the SDK was generated land in
+`__extra__` instead of disappearing, and parameters the SDK doesn't know
+about are still sent.
 
 **Names** follow the official SDKs. When a spec shows the official call in
 its examples, as OpenAI's does, Infusion uses it (`OpenAI.Chat.Completions.create`).

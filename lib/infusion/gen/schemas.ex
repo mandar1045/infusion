@@ -25,13 +25,42 @@ defmodule Infusion.Gen.Schemas do
   @type file :: %{module: String.t(), path: String.t(), source: String.t()}
 
   @doc """
-  Renders every named schema of `ir` under `base` (`"OpenAI"`). Returns the
-  files and the schema-name-to-module mapping.
+  Renders every schema of `ir` under `base` (`"OpenAI"`). Returns the files
+  and the schema-name-to-module mapping. Same as `prepare/2` followed by
+  `render/3`.
   """
   @spec render(%IR{}, String.t()) :: {[file], %{String.t() => String.t()}}
-  def render(%IR{schemas: schemas}, base) do
+  def render(%IR{} = ir, base) do
+    {ir, modules} = prepare(ir, base)
+    {render(ir, base, modules), modules}
+  end
+
+  @doc """
+  Gives every object with fields a module: named schemas, objects written
+  inline inside them, and objects written inline in an operation's success
+  response or event stream (Stripe's `GET /v1/customers` answers an inline
+  list object, which becomes `Stripe.Schemas.CustomersListResponse`).
+
+  Returns the IR with those inline objects replaced by references, so every
+  later step (operations, pagination) sees the same types, and the
+  schema-name-to-module mapping.
+  """
+  @spec prepare(%IR{}, String.t()) :: {%IR{}, %{String.t() => String.t()}}
+  def prepare(%IR{schemas: schemas} = ir, base) do
     modules = module_names(Map.keys(schemas), base)
-    {schemas, modules} = extract_inline(schemas, modules)
+    # The module mapping travels with the set of names taken, which would be
+    # slow to rebuild for every inline object (Cloudflare has 15,000).
+    names = {modules, MapSet.new(Map.values(modules))}
+    {operations, {new, names}} = lift_operations(ir.operations, base, names)
+    {schemas, {modules, _taken}} = extract_inline(Enum.into(new, schemas), names)
+    {%{ir | schemas: schemas, operations: operations}, modules}
+  end
+
+  @doc """
+  Renders the schemas of an IR made by `prepare/2`, with its module mapping.
+  """
+  @spec render(%IR{}, String.t(), %{String.t() => String.t()}) :: [file]
+  def render(%IR{schemas: schemas}, base, modules) do
     dir = "lib/" <> Naming.package(base) <> "/schemas/"
 
     # File names come from the (unique) module names, not the schema names:
@@ -53,26 +82,59 @@ defmodule Infusion.Gen.Schemas do
         {%{module: module, path: dir <> file <> ".ex", source: source}, MapSet.put(taken, file)}
       end)
 
-    {files, modules}
+    files
   end
+
+  # Inline objects in success responses and event streams become schemas
+  # named after the operation: Pets.list answers PetsListResponse, a list
+  # of PetsListResponseItem, and streams PetsListEvent. Keys start with "#",
+  # which no component name can.
+  defp lift_operations(operations, base, names) do
+    Enum.map_reduce(operations, {[], names}, fn op, acc ->
+      prefix = Enum.map_join(op.module, &Naming.module_part/1) <> Naming.module_part(op.function)
+      key = "#op:#{op.method} #{op.path}:"
+
+      {responses, acc} =
+        op.responses
+        |> Enum.sort()
+        |> Enum.map_reduce(acc, fn {status, r}, acc ->
+          if is_binary(status) and String.starts_with?(status, "2") do
+            {schema, acc} = lift_maybe(r.schema, base, prefix <> "Response", key <> status, acc)
+
+            {stream, acc} =
+              lift_maybe(r.stream_schema, base, prefix <> "Event", key <> status <> "~", acc)
+
+            {{status, %{r | schema: schema, stream_schema: stream}}, acc}
+          else
+            {{status, r}, acc}
+          end
+        end)
+
+      {%{op | responses: Map.new(responses)}, acc}
+    end)
+  end
+
+  defp lift_maybe(nil, _base, _part, _key, acc), do: {nil, acc}
+
+  defp lift_maybe(schema, base, part, key, acc),
+    do: lift(schema, base <> ".Schemas", part, key, acc)
 
   # Inline objects (schemas written inside another, without a name) become
   # nested modules named after where they appear: the items of
   # `CreateChatCompletionResponse.choices` are
   # `CreateChatCompletionResponse.Choice`. Objects nested inside those are
   # extracted too. Inline objects without fields stay plain maps.
-  defp extract_inline(schemas, modules) do
-    worklist = Enum.map(schemas, fn {name, schema} -> {name, schema} end)
-    do_extract(worklist, schemas, modules)
+  defp extract_inline(schemas, names) do
+    do_extract(Map.to_list(schemas), schemas, names)
   end
 
-  defp do_extract([], schemas, modules), do: {schemas, modules}
+  defp do_extract([], schemas, names), do: {schemas, names}
 
-  defp do_extract([{name, %Schema{kind: :object} = schema} | rest], schemas, modules) do
-    parent = Map.fetch!(modules, name)
+  defp do_extract([{name, %Schema{kind: :object} = schema} | rest], schemas, names) do
+    parent = Map.fetch!(elem(names, 0), name)
 
-    {fields, {new, modules}} =
-      Enum.map_reduce(schema.fields, {[], modules}, fn field, acc ->
+    {fields, {new, names}} =
+      Enum.map_reduce(schema.fields, {[], names}, fn field, acc ->
         {s, acc} =
           lift(
             field.schema,
@@ -86,16 +148,18 @@ defmodule Infusion.Gen.Schemas do
       end)
 
     schemas = Map.put(schemas, name, %{schema | fields: fields})
-    do_extract(new ++ rest, Enum.into(new, schemas), modules)
+    do_extract(new ++ rest, Enum.into(new, schemas), names)
   end
 
-  defp do_extract([_ | rest], schemas, modules), do: do_extract(rest, schemas, modules)
+  defp do_extract([_ | rest], schemas, names), do: do_extract(rest, schemas, names)
 
   # Replaces inline objects inside `s` by references to new named schemas.
-  defp lift(%Schema{kind: :object, fields: [_ | _]} = s, parent, part, key, {new, modules}) do
-    module = unique_module("#{parent}.#{part}", modules)
+  defp lift(%Schema{kind: :object, fields: [_ | _]} = s, parent, part, key, acc) do
+    {new, {modules, taken}} = acc
+    module = unique("#{parent}.#{part}", taken, 2)
     ref = %Schema{kind: :ref, ref: key, nullable?: s.nullable?, description: s.description}
-    {ref, {[{key, %{s | name: key}} | new], Map.put(modules, key, module)}}
+    names = {Map.put(modules, key, module), MapSet.put(taken, module)}
+    {ref, {[{key, %{s | name: key}} | new], names}}
   end
 
   defp lift(%Schema{kind: :array, items: items} = s, parent, part, key, acc) do
@@ -120,11 +184,6 @@ defmodule Infusion.Gen.Schemas do
   end
 
   defp lift(s, _parent, _part, _key, acc), do: {s, acc}
-
-  defp unique_module(module, modules) do
-    taken = MapSet.new(Map.values(modules))
-    if MapSet.member?(taken, module), do: unique(module, taken, 2), else: module
-  end
 
   defp singular(part) do
     cond do

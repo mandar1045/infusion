@@ -35,7 +35,8 @@ defmodule Infusion do
          {:ok, document, normalize_warnings} <- Normalize.run(resolved),
          {:ok, ir} <- IR.build(document),
          {:ok, ir, config_warnings} <- Config.apply(ir, config) do
-      {schema_files, modules} = Schemas.render(ir, base)
+      {ir, modules} = Schemas.prepare(ir, base)
+      schema_files = Schemas.render(ir, base, modules)
       operation_files = Operations.render(ir, base, modules)
       project_files = Project.render(ir, base, document, Keyword.put(opts, :spec, source))
 

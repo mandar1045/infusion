@@ -1,8 +1,19 @@
 # Changelog
 
-## Unreleased
+## 0.3.0
 
-`infusion.exs`: what the spec doesn't say, in one file next to the SDK.
+`infusion.exs`: what the spec doesn't say, in one file next to the SDK. And
+structs for the responses that were still plain maps.
+
+  * Objects a spec writes inline in a response, a list of results, or an
+    event stream are now structs named after the operation:
+    `Stripe.Schemas.CustomersListResponse`,
+    `GitHub.Schemas.ActionsListArtifactsForRepoResponse`, with their list
+    items (`...ResponseItem`) and events (`...Event`). That is 2,132
+    operations across Stripe, GitHub, Twilio, Cloudflare and OpenAI that
+    returned maps before. Pages read by `_all` functions decode their items
+    the same way. Regenerate SDKs to get them; code that matched on plain
+    maps (`%{"data" => ...}`) needs the struct fields instead
 
   * `mix infusion.gen --config infusion.exs` (or no arguments, when
     `./infusion.exs` exists); command-line flags win over the file
