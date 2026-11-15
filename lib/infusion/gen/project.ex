@@ -173,14 +173,16 @@ defmodule Infusion.Gen.Project do
           - name: Describe the changes
             run: |
               {
-                echo "The API spec changed, so the #{base} SDK was regenerated from it."
+                echo "Regenerating the #{base} SDK from its API spec changed it."
                 echo
                 echo "It compiles without warnings and its tests pass. Review the API changes below, then bump the version and the changelog before releasing."
                 echo
                 echo '```'
                 cat "$RUNNER_TEMP/infusion.log"
                 echo
-                git diff --stat
+                # Staged, so new and deleted files are counted too.
+                git add -A
+                git diff --cached --stat
                 echo '```'
               } > "$RUNNER_TEMP/body.md"
           - uses: peter-evans/create-pull-request@v7

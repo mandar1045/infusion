@@ -386,6 +386,7 @@ defmodule Infusion.ConfigTest do
       assert workflow =~ "mix infusion.gen --config infusion.exs"
       assert workflow =~ "peter-evans/create-pull-request@v7"
       assert workflow =~ "Regenerate from https://shop.test/openapi.json"
+      assert workflow =~ "git diff --cached --stat"
 
       assert files["mix.exs"] =~
                ~s({:infusion, path: "/src/infusion", only: :dev, runtime: false})

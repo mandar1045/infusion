@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.1
+
+  * The regeneration workflow's pull request lists new and deleted files in
+    its summary of changes, not only modified ones. Found by its first run
+    on the Twilio SDK
+
 ## 0.5.0
 
 SDKs that keep themselves up to date.
