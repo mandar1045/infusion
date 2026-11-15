@@ -1,12 +1,9 @@
 # Changelog
 
-## 0.3.0
+## 0.4.0
 
-`infusion.exs`: what the spec doesn't say, in one file next to the SDK. And
-structs for the responses that were still plain maps. Generated SDKs now
-need `infusion_runtime` 0.1.1.
-
-Everything the first Twilio SDK needed:
+Everything the first generated SDK, [Twilio](https://github.com/mandar1045/twilio),
+needed. Generated SDKs now depend on `infusion_runtime` 0.1.1.
 
   * `path_defaults`: a path parameter filled from a client setting instead
     of an argument. Twilio's `{AccountSid}` is in every path; with
@@ -24,6 +21,11 @@ Everything the first Twilio SDK needed:
     a file extension is the collection of its items
     (`/Calls/{CallSid}/Siprec.json` is `Calls.Siprec.create`). Only Twilio's
     names change among the five specs surveyed
+
+## 0.3.0
+
+`infusion.exs`: what the spec doesn't say, in one file next to the SDK. And
+structs for the responses that were still plain maps.
 
   * Objects a spec writes inline in a response, a list of results, or an
     event stream are now structs named after the operation:

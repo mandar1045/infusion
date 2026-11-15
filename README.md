@@ -89,7 +89,7 @@ Add Infusion to any Mix project as a dev tool:
 
 ```elixir
 def deps do
-  [{:infusion, "~> 0.3", only: :dev, runtime: false}]
+  [{:infusion, "~> 0.4", only: :dev, runtime: false}]
 end
 ```
 
