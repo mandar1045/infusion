@@ -12,12 +12,15 @@ defmodule Infusion.Naming do
        `x-oaiMeta` examples show `client.beta.assistants.list(...)`, which
        becomes `Beta.Assistants.list`.
     3. **`group/action` operation IDs**, as GitHub uses (`repos/get`).
-    4. **The path**, the way the official SDKs nest resources: `GET
+    4. **Remote procedure calls**: when the path ends in the operation ID
+       (`POST /api/GetUser`, `GetUser`), the tag and the operation ID, as
+       in 6, since the path names a call rather than a resource.
+    5. **The path**, the way the official SDKs nest resources: `GET
        /v1/customers` is `Customers.list`, `POST /v1/customers/{id}` is
        `Customers.update`, `POST /v1/payment_intents/{id}/cancel` is
        `PaymentIntents.cancel`, and `/v1/customers/{id}/sources` is a nested
        `Customers.Sources`.
-    5. **The tag and the operation ID**, when the path has no resource in it
+    6. **The tag and the operation ID**, when the path has no resource in it
        (`/` or `/{id}`), with version prefixes taken off the tag (Twilio's
        `Api20100401Recording`) and the module's words taken off the function.
   """
@@ -64,21 +67,42 @@ defmodule Infusion.Naming do
           strategy: :grouped_id
         }
 
+      rpc?(op, path) ->
+        %{tag_name(op, path, method) | strategy: :rpc}
+
       name = rest_name(path, method, context) ->
         name
 
       true ->
-        module = (tag(op) || "Default") |> strip_version_prefix() |> module_part()
-
-        function =
-          op["operationId"]
-          |> Kernel.||("#{method}_#{path}")
-          |> function_name()
-          |> drop_module_words(module)
-
-        %{module: [module], function: function, strategy: :tag}
+        tag_name(op, path, method)
     end
   end
+
+  defp tag_name(op, path, method) do
+    module = (tag(op) || "Default") |> strip_version_prefix() |> module_part()
+
+    function =
+      op["operationId"]
+      |> Kernel.||("#{method}_#{path}")
+      |> function_name()
+      |> drop_module_words(module)
+
+    %{module: [module], function: function, strategy: :tag}
+  end
+
+  # A path that ends in its operation's own name is a remote procedure call,
+  # not a resource: `POST /api/GetUser` with the operation ID `GetUser`
+  # (Lather's SOAP services), or Slack's `POST /chat.postMessage` with
+  # `chat_postMessage`. One-word names (`GET /health`, `health`) stay
+  # resources.
+  defp rpc?(%{"operationId" => id}, path) when is_binary(id) do
+    last = path |> segments() |> List.last()
+    id_words = words(id)
+
+    is_binary(last) and not param?(last) and length(id_words) > 1 and words(last) == id_words
+  end
+
+  defp rpc?(_op, _path), do: false
 
   # The SDK call shown in OpenAI's x-oaiMeta examples, Python first:
   # `client.beta.assistants.list(` or

@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.6.0 (unreleased)
+
+  * Remote procedure calls are named from the operation ID, not the path
+    (#1). When a path ends in its operation's own ID (`POST /api/GetUser`
+    with `GetUser`, as Lather serves SOAP services over JSON, or Slack's
+    `POST /chat.postMessage`), the path names a call, not a resource: the
+    function is now `Operations.get_user` (the tag and the operation ID)
+    instead of `GetUser.create`. SDKs generated from such specs get new
+    names when regenerated; the names in the OpenAI, Stripe, GitHub,
+    Cloudflare, Twilio and Surge SDKs don't change
+
 ## 0.5.2
 
   * Regenerating never replaces a file Infusion didn't write: a new

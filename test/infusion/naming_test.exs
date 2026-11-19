@@ -87,6 +87,43 @@ defmodule Infusion.NamingTest do
              name(%{"tags" => ["Chat"], "operationId" => "createChatCompletion"}, "/", "post")
   end
 
+  describe "remote procedure calls: the path ends in the operation ID" do
+    test "SOAP operations behind JSON (Lather): POST /api/<Operation>" do
+      for {id, function} <- [
+            {"GetUser", "get_user"},
+            {"ListUsers", "list_users"},
+            {"CreateUser", "create_user"}
+          ] do
+        assert name(%{"tags" => ["operations"], "operationId" => id}, "/api/#{id}", "post") ==
+                 %{module: ["Operations"], function: function, strategy: :rpc}
+      end
+    end
+
+    test "Slack-style method paths; the tag's words leave the function" do
+      assert %{module: ["Chat"], function: "post_message", strategy: :rpc} =
+               name(
+                 %{"tags" => ["chat"], "operationId" => "chat_postMessage"},
+                 "/chat.postMessage",
+                 "post"
+               )
+
+      assert %{module: ["Conversations"], function: "list", strategy: :rpc} =
+               name(
+                 %{"tags" => ["conversations"], "operationId" => "conversations_list"},
+                 "/conversations.list",
+                 "get"
+               )
+    end
+
+    test "one-word operation IDs and other operation IDs keep the path's name" do
+      assert %{module: ["Health"], function: "retrieve", strategy: :path} =
+               name(%{"tags" => ["Observability"], "operationId" => "health"}, "/health", "get")
+
+      assert %{module: ["Customers"], function: "create", strategy: :path} =
+               name(%{"operationId" => "PostCustomers"}, "/v1/customers", "post")
+    end
+  end
+
   describe "the official SDK call in the examples (OpenAI's x-oaiMeta)" do
     defp oai(python), do: %{"x-oaiMeta" => %{"examples" => %{"request" => %{"python" => python}}}}
 
