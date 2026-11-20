@@ -292,6 +292,22 @@ defmodule Infusion.Drift do
   # "Parent.field[]": the longest key that is a prefix, followed by one of
   # its fields.
   defp inline_segments(key, ctx) do
+    container_segments(key, ctx) || field_segments(key, ctx)
+  end
+
+  # "CoinsMarkets[]": the items of a named list (or map values, or variants).
+  defp container_segments(key, ctx) do
+    case Regex.run(~r/^(.*?)((?:\[\]|\{\}|\|\d+)+)$/, key) do
+      [_, parent, suffix] when parent != "" ->
+        if get(ctx.spec, ["components", "schemas", parent]) != nil,
+          do: descend(ctx.spec, ["components", "schemas", parent], suffix)
+
+      _ ->
+        nil
+    end
+  end
+
+  defp field_segments(key, ctx) do
     ctx.ir.schemas
     |> Map.keys()
     |> Enum.filter(&(String.starts_with?(key, &1 <> ".") and &1 != key))

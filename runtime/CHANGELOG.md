@@ -9,6 +9,12 @@
     counted per schema, field and operation, without keeping any response
     data; `report/0`, `format/0`, `export/1` (the input of `mix
     infusion.drift`), `reset/0`, and a `[:infusion, :drift]` telemetry event
+  * `Infusion.Runtime.Watch`: a list endpoint as a live feed of `:created`,
+    `:updated` and `:deleted` events (with the fields that changed), sent
+    to a process, a function or a `Phoenix.PubSub` topic. Every page is
+    asked for with `If-None-Match`, so unchanged pages are a `304`; deletes
+    only when the whole list was read; `X-Poll-Interval` respected;
+    `[:infusion, :watch, :poll]` telemetry
   * The runtime now has an application (it owns the drift table)
   * `Infusion.Runtime.Schema.variant/3`: the union variant decoding picks
 

@@ -512,6 +512,37 @@ defmodule Infusion.Gen.OperationsTest do
     assert_received {:query, "limit=2&after=t2"}
   end
 
+  test "a list gets a _watch function that sends what changes", %{result: result} do
+    toys = Enum.find(result.files, &(&1.path == "lib/petstore/toys.ex")).source
+    assert toys =~ "def list_watch(params \\\\ %{}, opts \\\\ [])"
+    assert toys =~ ~s(id: "id")
+
+    Req.Test.set_req_test_to_shared()
+    on_exit(fn -> Req.Test.set_req_test_to_private() end)
+    {:ok, api} = Agent.start_link(fn -> ~w(t1 t2) end)
+
+    Req.Test.stub(__MODULE__, fn conn ->
+      data = Enum.map(Agent.get(api, & &1), &%{"id" => &1})
+      Req.Test.json(conn, %{"data" => data, "has_more" => false})
+    end)
+
+    assert {:ok, watcher} = sdk("Toys").list_watch(%{limit: 10}, every: 20)
+    Agent.update(api, fn _ -> ~w(t2 t3) end)
+
+    events =
+      for _ <- 1..2 do
+        assert_receive {:infusion_watch, ^watcher, event}, 1_000
+        {event.type, event.id, event.item.__struct__}
+      end
+
+    assert Enum.sort(events) == [
+             {:created, "t3", PetStore.Schemas.Pet},
+             {:deleted, "t1", PetStore.Schemas.Pet}
+           ]
+
+    Infusion.Runtime.Watch.stop(watcher)
+  end
+
   test "a list paged by a Link header follows it" do
     Req.Test.expect(__MODULE__, fn conn ->
       conn

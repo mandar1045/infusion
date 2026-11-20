@@ -161,7 +161,28 @@ defmodule Infusion.Gen.Schemas do
     do_extract(new ++ rest, Enum.into(new, schemas), names)
   end
 
+  # A named list, map or union of inline objects (CoinGecko's `CoinsMarkets`,
+  # a list of objects): the objects get modules next to it, named after it
+  # (CoinGecko.Schemas.CoinsMarket).
+  defp do_extract([{name, %Schema{kind: kind} = schema} | rest], schemas, names)
+       when kind in [:array, :map, :union] do
+    module = Map.fetch!(elem(names, 0), name)
+    parts = String.split(module, ".")
+    namespace = parts |> Enum.drop(-1) |> Enum.join(".")
+    {lifted, {new, names}} = lift_inner(schema, namespace, List.last(parts), name, {[], names})
+    schemas = Map.put(schemas, name, lifted)
+    do_extract(new ++ rest, Enum.into(new, schemas), names)
+  end
+
   defp do_extract([_ | rest], schemas, names), do: do_extract(rest, schemas, names)
+
+  # Like lift/5 on a container, but never lifts the container itself.
+  defp lift_inner(%Schema{kind: :array, items: items} = s, parent, part, key, acc) do
+    {items, acc} = lift(items, parent, singular(part), key <> "[]", acc)
+    {%{s | items: items}, acc}
+  end
+
+  defp lift_inner(s, parent, part, key, acc), do: lift(s, parent, part, key, acc)
 
   # Replaces inline objects inside `s` by references to new named schemas.
   defp lift(%Schema{kind: :object, fields: [_ | _]} = s, parent, part, key, acc) do

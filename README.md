@@ -323,6 +323,43 @@ list operations.
 
 **Telemetry**: `[:infusion, :request, :start | :stop | :exception]`.
 
+## Any list, live
+
+Most APIs have webhooks or streams for a few things and plain lists for
+everything else. Every paginated list function of a generated SDK has a
+`_watch` variant that turns the list into a feed of changes:
+
+```elixir
+{:ok, watcher} = CoinGecko.Coins.Markets.list_watch(%{vs_currency: "usd", per_page: 20}, every: 30_000, pages: 1)
+
+# the calling process receives
+{:infusion_watch, ^watcher,
+ %Infusion.Runtime.Watch.Event{
+   type: :updated,
+   id: "bitcoin",
+   item: %CoinGecko.Schemas.CoinsMarket{current_price: 61781, ...},
+   changes: %{current_price: {61802, 61781}, price_change_percentage_24h: {-3.3204, -3.3603}, ...}
+ }}
+```
+
+It's a process linked to the caller, so a LiveView that starts one in
+`mount` gets every change in `handle_info`. This dashboard is a one-file
+LiveView app (about 100 lines, styles included), fed by the SDK generated from CoinGecko's spec, running
+against the real API (whose free tier has no realtime API at all):
+
+![A LiveView table of the top coins, updating live](docs/images/live-watch.png)
+
+It also works in a supervision tree, broadcasts with
+`to: {:pubsub, MyApp.PubSub, topic}`, or reads as a `Stream`.
+
+Every page is fetched with the `ETag` of the last poll, so a page that
+hasn't changed costs one empty `304 Not Modified` and nothing is decoded.
+Watching CoinGecko's top 20 every 30 seconds (it refreshes once a minute),
+every other poll was a 304. GitHub doesn't count 304s to authenticated
+requests against your rate limit. Deletions are reported when the watcher
+reads the whole list; `X-Poll-Interval` is respected. See
+`Infusion.Runtime.Watch`.
+
 ## How it's built
 
 ```
@@ -360,6 +397,7 @@ function that hands it to the runtime. More in [the design](docs/design.md).
         pagination overrides; regenerate an SDK from its own config
   * [x] Patch the spec where it's wrong, by hand or from what the real
         API returns (`mix infusion.drift`)
+  * [x] Any paginated list as a live feed of changes (`_watch`)
   * [ ] Hand-written code inside generated modules (`lib/<sdk>/custom/`)
   * [x] A GitHub workflow that regenerates an SDK when the vendor's spec
         changes and opens a pull request

@@ -254,6 +254,11 @@ defmodule Infusion.Gen.Project do
       def __paginate__(operation, path_args, params, opts) do
         Infusion.Runtime.Paginate.stream(config(), operation, path_args, params, opts)
       end
+
+      @doc false
+      def __watch__(operation, path_args, params, opts) do
+        Infusion.Runtime.Watch.start_link(config(), operation, path_args, params, opts)
+      end
     end
     """
     |> format()

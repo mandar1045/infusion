@@ -110,8 +110,10 @@ defmodule Infusion.Gen.Operations do
     response = response(op)
     stream = stream(op, ir)
     paginate = if stream == nil, do: Infusion.Gen.Pagination.detect(op, ir)
+    paginate = paginate && Map.put(paginate, :id, watch_id(paginate.item, ir))
     stream_name = variant(name, "stream", taken)
     all_name = variant(name, "all", taken)
+    watch_name = variant(name, "watch", taken)
 
     args = path_vars ++ if(takes_params?, do: ["params \\\\ %{}"], else: []) ++ ["opts \\\\ []"]
     call_params = if takes_params?, do: "params", else: "%{}"
@@ -161,6 +163,7 @@ defmodule Infusion.Gen.Operations do
 
     stream_call = String.replace(call, ".__request__(", ".__stream__(")
     all_call = String.replace(call, ".__request__(", ".__paginate__(")
+    watch_call = String.replace(call, ".__request__(", ".__watch__(")
     enum_spec = "{:ok, Enumerable.t()} | {:error, Infusion.Runtime.Error.t()}"
     args = Enum.join(args, ", ")
 
@@ -187,7 +190,10 @@ defmodule Infusion.Gen.Operations do
           [
             {name, return, result_spec, call, nil},
             {all_name, enum_spec, "Enumerable.t()", all_call,
-             "Like `#{name}/#{arity}`, but returns every item, from every page: a lazy stream of `#{item}` that fetches pages as it is read.\n\nThe first page is fetched right away, so its errors are returned; a later page that fails raises `Infusion.Runtime.Error`. Stopping early (`Enum.take/2`) fetches no more pages."}
+             "Like `#{name}/#{arity}`, but returns every item, from every page: a lazy stream of `#{item}` that fetches pages as it is read.\n\nThe first page is fetched right away, so its errors are returned; a later page that fails raises `Infusion.Runtime.Error`. Stopping early (`Enum.take/2`) fetches no more pages."},
+            {watch_name, "{:ok, pid()} | {:error, Infusion.Runtime.Error.t()}", "pid()",
+             watch_call,
+             "Watches this list and sends what changes: starts a process, linked to the caller, that polls it (with `ETag`s, so unchanged pages cost a `304`) and sends `{:infusion_watch, pid, %Infusion.Runtime.Watch.Event{}}` for every #{item} created, updated or deleted.\n\nOptions: `every:` (milliseconds, default 30 seconds), `to:` (a pid, `{:pubsub, MyApp.PubSub, topic}` or a function), `pages:`, `initial:`, `ignore:`, plus any setting of `Infusion.Runtime.Config`. See `Infusion.Runtime.Watch`."}
           ]
 
         true ->
@@ -209,6 +215,14 @@ defmodule Infusion.Gen.Operations do
       end)
 
     head <> Enum.join(sources, "\n")
+  end
+
+  # The JSON field that identifies a list item, for watching: the first of
+  # these the item has (Twilio's items have a `sid`, not an `id`).
+  @id_fields ~w(id sid uuid key node_id slug name)
+  defp watch_id(item, ir) do
+    names = item |> object_fields(ir, 0) |> Enum.map(& &1.name)
+    Enum.find(@id_fields, &(&1 in names))
   end
 
   # name_stream, name_all, unless another operation of the module has that name.

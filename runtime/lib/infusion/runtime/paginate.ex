@@ -63,8 +63,21 @@ defmodule Infusion.Runtime.Paginate do
     end
   end
 
+  @doc false
+  # The request for the first page, for Infusion.Runtime.Watch.
+  def first_request(operation, path_args, params),
+    do: %{operation: operation, path_args: path_args, params: Enum.to_list(params)}
+
+  @doc false
+  # The raw items of a fetched page and what comes next: {:fetch, request} | :done.
+  def page(%Req.Response{body: json} = response, request, pagination) do
+    raw = items(json, pagination.items)
+    {raw, if(raw == [], do: :done, else: next(pagination, response, raw, request))}
+  end
+
   # One page, undecoded: the paging fields are read from the JSON.
-  defp fetch(config, request, opts) do
+  @doc false
+  def fetch(config, request, opts) do
     operation = %{request.operation | response: nil} |> Map.delete(:paginate)
 
     Request.run(

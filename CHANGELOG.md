@@ -24,6 +24,14 @@ themselves.
     `nullable-simple-user`, 64 such schemas in GitHub's spec) is typed
     `... | nil`; it wasn't, even though the API returns `null` there
   * Generated SDKs depend on `infusion_runtime ~> 0.2.0`
+  * Any list, live: every paginated list function gets a `_watch` variant
+    (`GitHub.Issues.list_for_repo_watch/4`) that starts a process sending
+    `:created`, `:updated` (with the fields that changed) and `:deleted`
+    events. Conditional requests make unchanged polls a `304`. The item's
+    ID field is detected from the schema (`id`, Twilio's `sid`, ...)
+  * Fix: a named list of inline objects (CoinGecko's `CoinsMarkets`) decodes
+    into structs (`CoinsMarket`) instead of plain maps; 261 more schemas get
+    structs in GitHub's SDK
   * Remote procedure calls are named from the operation ID, not the path
     (#1). When a path ends in its operation's own ID (`POST /api/GetUser`
     with `GetUser`, as Lather serves SOAP services over JSON, or Slack's

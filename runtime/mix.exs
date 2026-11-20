@@ -29,6 +29,7 @@ defmodule Infusion.Runtime.MixProject do
       {:jason, "~> 1.4"},
       {:telemetry, "~> 1.0"},
       {:plug, "~> 1.14", only: :test},
+      {:phoenix_pubsub, "~> 2.1", only: :test},
       {:ex_doc, "~> 0.34", only: :dev, runtime: false}
     ]
   end

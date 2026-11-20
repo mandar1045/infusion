@@ -46,7 +46,8 @@ defmodule Infusion.MixProject do
     [
       main: "readme",
       source_ref: "v#{@version}",
-      extras: ["README.md", "docs/design.md", "docs/spec-survey.md", "CHANGELOG.md"]
+      extras: ["README.md", "docs/design.md", "docs/spec-survey.md", "CHANGELOG.md"],
+      assets: %{"docs/images" => "docs/images"}
     ]
   end
 end
