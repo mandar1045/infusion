@@ -9,6 +9,8 @@ defmodule Infusion.Gen.Schemas do
         defstruct [:id, :choices, ..., __extra__: %{}, __present__: []]
         @type t :: %__MODULE__{id: String.t(), choices: [OpenAI.Schemas.Choice.t()], ...}
         def __schema__(:fields), do: [{:id, "id", :string}, ...]
+        def __schema__(:required), do: ["id", ...]
+        def __schema__(:nullable), do: [...]
         def decode(json), do: Infusion.Runtime.Schema.decode_module(json, __MODULE__)
       end
 
@@ -67,6 +69,10 @@ defmodule Infusion.Gen.Schemas do
   def render(%IR{schemas: schemas}, base, modules) do
     dir = "lib/" <> Naming.package(base) <> "/schemas/"
 
+    # Schemas that are nullable themselves: GitHub's `nullable-simple-user`
+    # says `nullable: true` once, and every field referring to it can be null.
+    nullable = for {name, %Schema{nullable?: true}} <- schemas, into: MapSet.new(), do: name
+
     # File names come from the (unique) module names, not the schema names:
     # Cloudflare has schemas that differ only in punctuation.
     {files, _taken} =
@@ -82,7 +88,7 @@ defmodule Infusion.Gen.Schemas do
           |> Naming.function_name()
           |> unique_field(taken, 2)
 
-        source = module_source(module, schema, modules)
+        source = module_source(module, schema, modules, nullable)
         {%{module: module, path: dir <> file <> ".ex", source: source}, MapSet.put(taken, file)}
       end)
 
@@ -251,8 +257,11 @@ defmodule Infusion.Gen.Schemas do
 
   ## Modules
 
-  defp module_source(module, %Schema{kind: :object} = schema, modules) do
-    fields = field_names(schema.fields)
+  defp module_source(module, %Schema{kind: :object} = schema, modules, nullable_refs) do
+    fields =
+      for {f, x} <- field_names(schema.fields) do
+        {%{f | schema: nullable_ref(f.schema, nullable_refs)}, x}
+      end
 
     struct_fields = Enum.map_join(fields, ", ", fn {f, _} -> ":#{f.field}" end)
     struct_fields = if struct_fields == "", do: "", else: struct_fields <> ", "
@@ -263,6 +272,21 @@ defmodule Infusion.Gen.Schemas do
       end)
 
     types = if types == "", do: "", else: types <> ",\n"
+
+    # For drift checks (Infusion.Runtime.Drift): JSON names of the fields a
+    # response must have (write-only ones never appear in responses) and of
+    # those that may be null.
+    required = for {f, _} <- fields, f.required? and not f.write_only?, do: f.name
+    nullable = for {f, _} <- fields, f.schema.nullable?, do: f.name
+
+    # The type of keys the object doesn't list, when the spec gives one
+    # (GitHub's app `permissions`: any name, a string). nil: not documented.
+    additional =
+      case schema.additional do
+        nil -> "nil"
+        %Schema{kind: :object, fields: [_ | _]} -> ":any"
+        other -> descriptor(other, modules)
+      end
 
     descriptors =
       Enum.map_join(fields, ",\n", fn {f, _} ->
@@ -286,6 +310,10 @@ defmodule Infusion.Gen.Schemas do
         [#{descriptors}]
       end
 
+      def __schema__(:required), do: #{lit(required)}
+      def __schema__(:nullable), do: #{lit(nullable)}
+      def __schema__(:additional), do: #{additional}
+
       @doc "Decodes parsed JSON into this struct."
       @spec decode(term) :: t | term
       def decode(json), do: Infusion.Runtime.Schema.decode_module(json, __MODULE__)
@@ -294,7 +322,7 @@ defmodule Infusion.Gen.Schemas do
     |> format()
   end
 
-  defp module_source(module, schema, modules) do
+  defp module_source(module, schema, modules, _nullable_refs) do
     """
     defmodule #{module} do
       @moduledoc #{doc(schema.description, [])}
@@ -311,6 +339,12 @@ defmodule Infusion.Gen.Schemas do
     """
     |> format()
   end
+
+  defp nullable_ref(%Schema{kind: :ref, ref: ref} = schema, nullable_refs) do
+    if MapSet.member?(nullable_refs, ref), do: %{schema | nullable?: true}, else: schema
+  end
+
+  defp nullable_ref(schema, _nullable_refs), do: schema
 
   # Field names unique within the struct: "userId" and "user_id" both become
   # user_id. A property whose JSON name already is the field name keeps it;

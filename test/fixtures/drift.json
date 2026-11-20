@@ -1,0 +1,82 @@
+{
+  "openapi": "3.0.3",
+  "info": {"title": "Tracker", "version": "1"},
+  "servers": [{"url": "https://tracker.test"}],
+  "paths": {
+    "/issues/{id}": {
+      "get": {
+        "operationId": "getIssue",
+        "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "integer"}}],
+        "responses": {"200": {"$ref": "#/components/responses/Issue"}}
+      }
+    },
+    "/issues": {
+      "get": {
+        "operationId": "listIssues",
+        "responses": {
+          "200": {
+            "description": "A page of issues",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["items", "total"],
+                  "properties": {
+                    "items": {"type": "array", "items": {"$ref": "#/components/schemas/Issue"}},
+                    "total": {"type": "integer"}
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "responses": {
+      "Issue": {
+        "description": "An issue",
+        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Issue"}}}
+      }
+    },
+    "schemas": {
+      "Record": {
+        "type": "object",
+        "required": ["id", "created_at"],
+        "properties": {
+          "id": {"type": "integer"},
+          "created_at": {"type": "string"}
+        }
+      },
+      "State": {"type": "string", "enum": ["open", "closed"]},
+      "User": {
+        "type": "object",
+        "required": ["login"],
+        "properties": {"login": {"type": "string"}}
+      },
+      "Issue": {
+        "allOf": [
+          {"$ref": "#/components/schemas/Record"},
+          {
+            "type": "object",
+            "required": ["title", "state", "assignee"],
+            "properties": {
+              "title": {"type": "string"},
+              "state": {"$ref": "#/components/schemas/State"},
+              "assignee": {"$ref": "#/components/schemas/User"},
+              "milestone": {
+                "type": "object",
+                "properties": {
+                  "title": {"type": "string"},
+                  "due_on": {"type": "string"}
+                }
+              },
+              "priority": {"type": "integer"}
+            }
+          }
+        ]
+      }
+    }
+  }
+}

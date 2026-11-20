@@ -2,6 +2,28 @@
 
 ## 0.6.0 (unreleased)
 
+SDKs that notice when the API disagrees with its own spec, and fix
+themselves.
+
+  * Drift checking (needs `infusion_runtime` 0.2): with `config
+    :infusion_runtime, drift: true`, a generated SDK compares every response
+    with the spec it was generated from: undocumented fields, missing
+    required fields, unexpected nulls, wrong types, unknown enum values and
+    union variants. `Infusion.Runtime.Drift.export/1` writes what it saw
+  * `mix infusion.drift report.json` traces each finding to the exact place
+    in the vendor's spec (through renames, inline objects, `allOf` and
+    `$ref`s), prints the fix, writes it to `infusion.patches.json` with
+    `--write`, and drafts an issue for the API's owners with `--issue`
+  * Spec patches: `patches:` in `infusion.exs`, or `infusion.patches.json`
+    next to it, fix the vendor's spec as it is loaded (`merge`, `unrequire`,
+    `add_enum`, and JSON Patch's `add` / `replace` / `remove`). A patch the
+    spec no longer needs (the vendor fixed it) is reported so you can drop it
+  * Generated structs say which fields are required and which can be null
+    (`__schema__(:required)`, `__schema__(:nullable)`)
+  * Fix: a field referring to a nullable schema (GitHub's
+    `nullable-simple-user`, 64 such schemas in GitHub's spec) is typed
+    `... | nil`; it wasn't, even though the API returns `null` there
+  * Generated SDKs depend on `infusion_runtime ~> 0.2.0`
   * Remote procedure calls are named from the operation ID, not the path
     (#1). When a path ends in its operation's own ID (`POST /api/GetUser`
     with `GetUser`, as Lather serves SOAP services over JSON, or Slack's

@@ -11,7 +11,7 @@ defmodule Infusion.Gen.Project do
   alias Infusion.Naming
 
   # ~> 0.1.0, not ~> 0.1: before 1.0, a minor release may break SDKs.
-  @runtime_version "~> 0.1.1"
+  @runtime_version "~> 0.2.0"
 
   # The SDK regenerates itself (`mix infusion.gen` in its directory, and the
   # scheduled workflow) with this generator, pinned to its minor version:
@@ -31,7 +31,7 @@ defmodule Infusion.Gen.Project do
     * `:license`: the SDK's license for Hex (default `"Apache-2.0"`)
     * `:env_var`: where the API key is read from (default `OPENAI_API_KEY`)
     * `:runtime_dep`: the `infusion_runtime` dependency as code (default
-      `{:infusion_runtime, "~> 0.1.1"}`), e.g. a `path:` dependency
+      `{:infusion_runtime, "~> 0.2.0"}`), e.g. a `path:` dependency
     * `:infusion_dep`: the same for `infusion` itself, a dev-only dependency
       so the SDK can regenerate itself
     * `:spec`, `:out`: where the spec is and where the SDK goes, for the
@@ -386,6 +386,7 @@ defmodule Infusion.Gen.Project do
     settings =
       [name: base, spec: spec_path(opts[:spec], opts[:out]), out: ".", app: app, env_var: env_var]
       |> Keyword.merge(Keyword.drop(given, [:name, :spec, :out, :app, :env_var]))
+      |> patches_path(opts[:out])
       |> Enum.reject(fn {_k, v} -> v == nil end)
       |> Enum.sort_by(fn {k, _} -> Enum.find_index(Infusion.Config.keys(), &(&1 == k)) end)
 
@@ -398,6 +399,21 @@ defmodule Infusion.Gen.Project do
     #{lit(settings)}
     """
     |> format()
+  end
+
+  # A patches file next to the SDK's infusion.exs is found without saying so.
+  defp patches_path(settings, out) do
+    case settings[:patches] do
+      path when is_binary(path) ->
+        relative = spec_path(path, out)
+
+        if relative == "infusion.patches.json",
+          do: Keyword.delete(settings, :patches),
+          else: Keyword.put(settings, :patches, relative)
+
+      _ ->
+        settings
+    end
   end
 
   defp spec_path(nil, _out), do: nil

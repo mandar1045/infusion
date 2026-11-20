@@ -185,6 +185,47 @@ Your own files (tests, a hand-written README in `keep`) are never touched, and
 a generated file you edited by hand stops the run instead of being
 overwritten.
 
+### When the spec is wrong
+
+Specs are written by hand and drift from the servers they describe, and
+every SDK generated from them inherits the mistakes. A generated SDK can
+notice. Turn on drift checking and it compares each response with the spec
+it was generated from:
+
+```elixir
+# config/config.exs (or `drift: 0.01` to check 1% of calls in production)
+config :infusion_runtime, drift: true
+
+Infusion.Runtime.Drift.export("drift.json")
+```
+
+Then, in the SDK's project:
+
+```console
+$ mix infusion.drift drift.json --write --issue spec_issue.md
+2 disagreements between the spec and the API:
+
+unexpected_null GitHub.Schemas.BaseGist.FilesValue.language (1x)
+    spec: /components/schemas/base-gist/properties/files/additionalProperties/properties/language
+    fix:  merge %{"nullable" => true}
+
+undocumented_field GitHub.Schemas.Environment.can_admins_bypass (1x)
+    spec: /components/schemas/environment/properties/can_admins_bypass
+    fix:  merge %{"description" => "Not in the vendor's spec: ...", "type" => "boolean"}
+
+Wrote 2 patches to infusion.patches.json. Regenerate with `mix infusion.gen` to apply them.
+```
+
+That is real output, from 52 calls to GitHub's public API with an SDK
+generated from GitHub's official spec. Each finding is traced to the exact
+place in the vendor's spec, through module renames, inline objects, `allOf`
+and `$ref`s. The patches go in `infusion.patches.json`, which every
+regeneration applies on top of the vendor's latest spec, so the SDK gets the
+fields and nulls the API really returns. `--issue` drafts a report for the
+API's owners. When they fix their spec, regenerating says the patch is no
+longer needed. No response data is kept, only JSON types, so a report can be
+shared. Patches can also be written by hand: see `Infusion.Patch`.
+
 ## Using a generated SDK
 
 Path parameters are positional. Everything else the API takes is one map or
@@ -317,7 +358,8 @@ function that hands it to the runtime. More in [the design](docs/design.md).
   * [x] Pagination as lazy streams (cursor, page, offset, `Link` header)
   * [x] `infusion.exs`: rename modules and functions, auth, headers,
         pagination overrides; regenerate an SDK from its own config
-  * [ ] Patch the spec where it's wrong, from `infusion.exs`
+  * [x] Patch the spec where it's wrong, by hand or from what the real
+        API returns (`mix infusion.drift`)
   * [ ] Hand-written code inside generated modules (`lib/<sdk>/custom/`)
   * [x] A GitHub workflow that regenerates an SDK when the vendor's spec
         changes and opens a pull request

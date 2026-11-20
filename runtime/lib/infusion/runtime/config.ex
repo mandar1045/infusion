@@ -28,6 +28,8 @@ defmodule Infusion.Runtime.Config do
     * `:user_agent`: the `user-agent` header
     * `:req_options`: passed to `Req.new/1` as is, e.g. `plug: {Req.Test, MyStub}`
     * `:sleep`: how to wait between retries, `fn ms -> ... end` (for tests)
+    * `:drift`: compare responses with the spec, `true`, `false` or the
+      share of calls to check; see `Infusion.Runtime.Drift`
 
   Any other key is kept in `extra`, for settings an SDK defines itself, such
   as Twilio's `:account_sid` (see `setting/2`).
@@ -52,7 +54,8 @@ defmodule Infusion.Runtime.Config do
     form_style: :indexed,
     user_agent: nil,
     req_options: [],
-    sleep: nil
+    sleep: nil,
+    drift: nil
   ]
 
   defstruct @defaults ++ [extra: %{}]

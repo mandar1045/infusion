@@ -48,6 +48,10 @@ defmodule Infusion.Config do
       generated `mix.exs`: `links: %{"GitHub" => "https://github.com/..."}`
     * `keep`: files that are yours once they exist, written only when
       missing: `keep: ["README.md"]` for a hand-written README
+    * `patches`: fixes to the vendor's spec, applied as it is loaded: a
+      list, or the path of a JSON file (default: `infusion.patches.json`
+      next to this file, when there is one). See `Infusion.Patch`, and
+      `mix infusion.drift`, which writes them from what the real API returns
     * `schema_names`: `:full` (default) or `:last_segment`, which names a
       dotted schema by its last part when no other schema has it:
       Twilio's `api.v2010.account.message` becomes `Schemas.Message`, not
@@ -128,7 +132,8 @@ defmodule Infusion.Config do
     :links,
     :keep,
     :env_var,
-    :schema_names
+    :schema_names,
+    :patches
   ]
   @client_keys [
     :base_url,
@@ -174,7 +179,13 @@ defmodule Infusion.Config do
     with {:ok, value} <- eval(path),
          :ok <- validate(value) do
       dir = path |> Path.expand() |> Path.dirname()
-      {:ok, value |> expand(:spec, dir) |> expand(:out, dir)}
+
+      {:ok,
+       value
+       |> default_patches(dir)
+       |> expand(:spec, dir)
+       |> expand(:out, dir)
+       |> expand(:patches, dir)}
     end
   end
 
@@ -189,9 +200,20 @@ defmodule Infusion.Config do
     e -> {:error, "#{path}: #{Exception.message(e)}"}
   end
 
+  # infusion.patches.json next to infusion.exs (what `mix infusion.drift
+  # --write` writes) is used unless `patches` says otherwise.
+  defp default_patches(opts, dir) do
+    file = Path.join(dir, "infusion.patches.json")
+
+    if Keyword.has_key?(opts, :patches) or not File.regular?(file),
+      do: opts,
+      else: Keyword.put(opts, :patches, file)
+  end
+
   defp expand(opts, key, dir) do
     case opts[key] do
       nil -> opts
+      list when is_list(list) -> opts
       value -> if url?(value), do: opts, else: Keyword.put(opts, key, Path.expand(value, dir))
     end
   end
@@ -234,6 +256,16 @@ defmodule Infusion.Config do
       do: :ok,
       else: expected(:links, ~s(a map of names to URLs, like %{"GitHub" => "https://..."}), value)
   end
+
+  defp check(:patches, value) when is_binary(value) or is_list(value) do
+    case Infusion.Patch.load(if is_list(value), do: value, else: []) do
+      {:ok, _} -> :ok
+      {:error, message} -> {:error, message}
+    end
+  end
+
+  defp check(:patches, value),
+    do: expected(:patches, "the path of a JSON file of patches, or a list of patches", value)
 
   defp check(:keep, value) when is_list(value) do
     if Enum.all?(value, &is_binary/1),

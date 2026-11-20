@@ -220,4 +220,46 @@ defmodule Infusion.Gen.SchemasTest do
     {_ir, modules} = Infusion.Gen.Schemas.prepare(ir, "Tw")
     assert modules["api.v1.account.message"] == "Tw.Schemas.ApiV1AccountMessage"
   end
+
+  test "a field referring to a nullable schema can be null (GitHub's nullable-simple-user)" do
+    doc = %{
+      "openapi" => "3.0.3",
+      "paths" => %{},
+      "components" => %{
+        "schemas" => %{
+          "Issue" => %{
+            "type" => "object",
+            "required" => ["assignee", "owner"],
+            "properties" => %{
+              "assignee" => %{"$ref" => "#/components/schemas/nullable-user"},
+              "owner" => %{"$ref" => "#/components/schemas/user"},
+              "permissions" => %{
+                "type" => "object",
+                "properties" => %{"issues" => %{"type" => "string"}},
+                "additionalProperties" => %{"type" => "string"}
+              }
+            }
+          },
+          "nullable-user" => %{
+            "type" => "object",
+            "nullable" => true,
+            "properties" => %{"login" => %{"type" => "string"}}
+          },
+          "user" => %{"type" => "object", "properties" => %{"login" => %{"type" => "string"}}}
+        }
+      }
+    }
+
+    {files, _} = generate(doc, "Hub")
+    issue = Enum.find(files, &(&1.module == "Hub.Schemas.Issue")).source
+
+    assert issue =~ "assignee: Hub.Schemas.NullableUser.t() | nil"
+    assert issue =~ "owner: Hub.Schemas.User.t(),"
+    assert issue =~ ~S|def __schema__(:nullable), do: ["assignee"]|
+    assert issue =~ ~S|def __schema__(:required), do: ["assignee", "owner"]|
+    assert issue =~ "def __schema__(:additional), do: nil"
+
+    permissions = Enum.find(files, &(&1.module == "Hub.Schemas.Issue.Permissions")).source
+    assert permissions =~ "def __schema__(:additional), do: :string"
+  end
 end

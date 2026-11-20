@@ -1,7 +1,7 @@
 defmodule Infusion.Runtime.MixProject do
   use Mix.Project
 
-  @version "0.1.1"
+  @version "0.2.0"
   @source_url "https://github.com/mandar1045/infusion"
 
   def project do
@@ -20,7 +20,7 @@ defmodule Infusion.Runtime.MixProject do
   end
 
   def application do
-    [extra_applications: [:logger]]
+    [extra_applications: [:logger], mod: {Infusion.Runtime.Application, []}]
   end
 
   defp deps do

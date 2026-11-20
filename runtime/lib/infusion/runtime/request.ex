@@ -45,10 +45,11 @@ defmodule Infusion.Runtime.Request do
 
   `[:infusion, :request, :start | :stop | :exception]`, with `:operation`,
   `:method` and `:url` in the metadata; `:stop` adds `:status` (or
-  `:error`) and `:retries`.
+  `:error`) and `:retries`. With drift checking on, `[:infusion, :drift]`
+  for responses that disagree with the spec (`Infusion.Runtime.Drift`).
   """
 
-  alias Infusion.Runtime.{Config, Error, Form, Schema, SSE}
+  alias Infusion.Runtime.{Config, Drift, Error, Form, Schema, SSE}
 
   @retry_statuses [408, 409, 429]
   @max_server_delay 60_000
@@ -95,7 +96,7 @@ defmodule Infusion.Runtime.Request do
       result =
         case result do
           {:ok, %Req.Response{status: status} = response} when status in 200..299 ->
-            events = events(response, operation)
+            events = events(response, operation, config)
             if opts[:raw], do: {:ok, %{response | body: events}}, else: {:ok, events}
 
           other ->
@@ -445,8 +446,9 @@ defmodule Infusion.Runtime.Request do
   defp finish({:error, exception}, _op, _config, _opts),
     do: {:error, Error.from_exception(exception)}
 
-  defp finish({:ok, %Req.Response{status: status} = response}, op, _config, opts)
+  defp finish({:ok, %Req.Response{status: status} = response}, op, config, opts)
        when status in 200..299 do
+    drift(response.body, op[:response], op, config)
     decoded = decode(response.body, op[:response])
     if opts[:raw], do: {:ok, %{response | body: decoded}}, else: {:ok, decoded}
   end
@@ -477,11 +479,11 @@ defmodule Infusion.Runtime.Request do
 
   defp put_stream_param(params, _), do: params
 
-  defp events(%Req.Response{body: %Req.Response.Async{} = body}, op) do
+  defp events(%Req.Response{body: %Req.Response.Async{} = body}, op, config) do
     body
     |> Stream.transform(&SSE.new/0, &SSE.parse(&2, &1), &{SSE.flush(&1), &1}, fn _ -> :ok end)
     |> Stream.transform(:ok, fn event, acc ->
-      case decode_event(event, op) do
+      case decode_event(event, op, config) do
         :done -> {:halt, acc}
         :skip -> {[], acc}
         {:ok, value} -> {[value], acc}
@@ -490,12 +492,15 @@ defmodule Infusion.Runtime.Request do
   end
 
   # 2xx but not an event stream: the API answered in one piece.
-  defp events(%Req.Response{body: body}, op), do: [decode(body, op[:response])]
+  defp events(%Req.Response{body: body}, op, config) do
+    drift(body, op[:response], op, config)
+    [decode(body, op[:response])]
+  end
 
-  defp decode_event(%SSE.Event{data: "[DONE]"}, _op), do: :done
-  defp decode_event(%SSE.Event{data: ""}, _op), do: :skip
+  defp decode_event(%SSE.Event{data: "[DONE]"}, _op, _config), do: :done
+  defp decode_event(%SSE.Event{data: ""}, _op, _config), do: :skip
 
-  defp decode_event(%SSE.Event{event: name, data: data}, op) do
+  defp decode_event(%SSE.Event{event: name, data: data}, op, config) do
     case Jason.decode(data) do
       {:ok, %{"error" => error} = json} when is_map(error) or name == "error" ->
         raise Error.from_stream(json)
@@ -504,12 +509,24 @@ defmodule Infusion.Runtime.Request do
         raise Error.from_stream(json)
 
       {:ok, json} ->
+        drift(json, op[:stream_response], op, config)
         {:ok, decode(json, op[:stream_response])}
 
       {:error, _} ->
         {:ok, data}
     end
   end
+
+  # Compares the response with the spec, when asked to: see Infusion.Runtime.Drift.
+  defp drift(body, type, op, config) when (is_map(body) or is_list(body)) and type != nil do
+    if Drift.enabled?(config) do
+      Drift.observe(body, type, "#{op.method |> to_string() |> String.upcase()} #{op.path}")
+    end
+
+    :ok
+  end
+
+  defp drift(_body, _type, _op, _config), do: :ok
 
   defp decode("", _type), do: nil
   defp decode(body, nil), do: body

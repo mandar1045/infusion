@@ -10,7 +10,7 @@ defmodule Infusion do
   [design](docs/design.md) for how specs become SDKs.
   """
 
-  alias Infusion.{Config, IR, Normalize, Ref, Spec}
+  alias Infusion.{Config, IR, Normalize, Patch, Ref, Spec}
   alias Infusion.Gen.{Operations, Project, Schemas}
 
   @doc """
@@ -25,17 +25,8 @@ defmodule Infusion do
           {:ok, %{files: [Schemas.file()], warnings: [String.t()], ir: %IR{}}}
           | {:error, String.t()}
   def generate(source, opts) do
-    base = opts |> Keyword.fetch!(:name) |> base_name()
-    opts = Keyword.put(opts, :name, base)
-    config = Keyword.take(opts, Config.keys())
-
-    with :ok <- Config.validate(config),
-         {:ok, spec} <- Spec.load(source, opts),
-         {:ok, resolved} <- Ref.resolve(spec.document),
-         {:ok, document, normalize_warnings} <- Normalize.run(resolved),
-         {:ok, ir} <- IR.build(document),
-         {:ok, ir, config_warnings} <- Config.apply(ir, config) do
-      {ir, modules} = Schemas.prepare(ir, base, Keyword.take(config, [:schema_names]))
+    with {:ok, built} <- build(source, opts) do
+      %{ir: ir, modules: modules, base: base, document: document, opts: opts} = built
       schema_files = Schemas.render(ir, base, modules)
       operation_files = Operations.render(ir, base, modules)
       project_files = Project.render(ir, base, document, Keyword.put(opts, :spec, source))
@@ -43,8 +34,44 @@ defmodule Infusion do
       {:ok,
        %{
          files: project_files ++ operation_files ++ schema_files,
-         warnings: config_warnings ++ normalize_warnings ++ ir.warnings,
+         warnings: built.warnings,
          ir: ir
+       }}
+    end
+  end
+
+  @doc """
+  Everything `generate/2` does before writing code: the spec loaded and
+  patched (`spec`, as the vendor wrote it plus `Infusion.Patch`es), the
+  normalized `document`, the `ir` and the schema-name-to-module mapping
+  (`modules`). Used by `mix infusion.drift` to trace generated modules back
+  to the spec.
+  """
+  @spec build(String.t(), keyword) :: {:ok, map} | {:error, String.t()}
+  def build(source, opts) do
+    base = opts |> Keyword.fetch!(:name) |> base_name()
+    opts = Keyword.put(opts, :name, base)
+    config = Keyword.take(opts, Config.keys())
+
+    with :ok <- Config.validate(config),
+         {:ok, spec} <- Spec.load(source, opts),
+         {:ok, patches} <- Patch.load(config[:patches]),
+         {patched, patch_warnings} = Patch.apply(spec.document, patches),
+         {:ok, resolved} <- Ref.resolve(patched),
+         {:ok, document, normalize_warnings} <- Normalize.run(resolved),
+         {:ok, ir} <- IR.build(document),
+         {:ok, ir, config_warnings} <- Config.apply(ir, config) do
+      {ir, modules} = Schemas.prepare(ir, base, Keyword.take(config, [:schema_names]))
+
+      {:ok,
+       %{
+         base: base,
+         opts: opts,
+         spec: patched,
+         document: document,
+         ir: ir,
+         modules: modules,
+         warnings: patch_warnings ++ config_warnings ++ normalize_warnings ++ ir.warnings
        }}
     end
   end

@@ -93,7 +93,9 @@ defmodule Infusion.IR do
       values: [],
       nullable?: false,
       deprecated?: false,
-      extra_fields?: false
+      extra_fields?: false,
+      # an object's typed additionalProperties: the schema of keys it doesn't list
+      additional: nil
     ]
   end
 
@@ -524,7 +526,17 @@ defmodule Infusion.IR do
             }
           end
 
-        %{base | kind: :object, fields: fields, extra_fields?: extra != false}
+        additional =
+          if is_map(extra) and extra != %{},
+            do: schema(extra, "#{where}.additionalProperties")
+
+        %{
+          base
+          | kind: :object,
+            fields: fields,
+            extra_fields?: extra != false,
+            additional: additional
+        }
     end
   end
 

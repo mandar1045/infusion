@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.0 (unreleased)
+
+  * `Infusion.Runtime.Drift`: compares an API's responses (and stream
+    events) with the spec the SDK was generated from, when turned on with
+    `drift: true` (or a sample rate like `0.01`) in `config
+    :infusion_runtime`, an SDK's config or a call's options. Findings are
+    counted per schema, field and operation, without keeping any response
+    data; `report/0`, `format/0`, `export/1` (the input of `mix
+    infusion.drift`), `reset/0`, and a `[:infusion, :drift]` telemetry event
+  * The runtime now has an application (it owns the drift table)
+  * `Infusion.Runtime.Schema.variant/3`: the union variant decoding picks
+
 ## 0.1.1
 
 What the Twilio SDK needs; nothing changes for existing SDKs.

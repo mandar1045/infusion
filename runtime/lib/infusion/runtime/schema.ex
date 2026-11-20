@@ -104,21 +104,29 @@ defmodule Infusion.Runtime.Schema do
 
   ## Unions
 
-  defp decode_union(json, variants, {property, mapping}) when is_map(json) do
-    with tag when is_binary(tag) <- Map.get(json, property),
-         {:ok, module} <- Map.fetch(mapping, tag) do
-      decode_module(json, module)
-    else
-      _ -> decode_union(json, variants, nil)
-    end
-  end
-
-  defp decode_union(json, variants, _discriminator) do
-    case best_variant(json, variants) do
+  defp decode_union(json, variants, discriminator) do
+    case variant(json, variants, discriminator) do
       nil -> json
       type -> decode(json, type)
     end
   end
+
+  @doc """
+  The variant of a union that decoding picks for `json`: the one its
+  discriminator names, otherwise the one its shape fits best. `nil` when no
+  variant fits (decoding then keeps the raw value).
+  """
+  @spec variant(term, [term], nil | {String.t(), map}) :: term | nil
+  def variant(json, variants, {property, mapping}) when is_map(json) do
+    with tag when is_binary(tag) <- Map.get(json, property),
+         {:ok, module} <- Map.fetch(mapping, tag) do
+      {:ref, module}
+    else
+      _ -> best_variant(json, variants)
+    end
+  end
+
+  def variant(json, variants, _discriminator), do: best_variant(json, variants)
 
   # The variant that fits `json` best: scalar types by the value's own type;
   # objects by how many of their fields are present, with a const field that
@@ -174,7 +182,8 @@ defmodule Infusion.Runtime.Schema do
 
   # function_exported?/3 is false for a module that isn't loaded yet, and
   # outside releases modules load on first use: load it first.
-  defp struct_module?(module) do
+  @doc false
+  def struct_module?(module) do
     Code.ensure_loaded(module)
     function_exported?(module, :__struct__, 0)
   end

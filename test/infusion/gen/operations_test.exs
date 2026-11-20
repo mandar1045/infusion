@@ -369,7 +369,7 @@ defmodule Infusion.Gen.OperationsTest do
 
     mix = Enum.find(result.files, &(&1.path == "mix.exs")).source
     assert mix =~ "app: :petstore_sdk"
-    assert mix =~ ~s({:infusion_runtime, "~> 0.1.1"})
+    assert mix =~ ~s({:infusion_runtime, "~> 0.2.0"})
 
     pets = Enum.find(result.files, &(&1.path == "lib/petstore/pets.ex")).source
     assert pets =~ ~s(@doc """)
