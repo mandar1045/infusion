@@ -15,7 +15,12 @@
     asked for with `If-None-Match`, so unchanged pages are a `304`; deletes
     only when the whole list was read; an item new to a partial view is
     `:created` only when its creation time says so, else `:entered`;
-    `X-Poll-Interval` respected;
+    `X-Poll-Interval` respected; `async: true` for supervision trees (an
+    API that is down at boot doesn't stop the application starting);
+    `ignore:` takes nested paths (`"base.repo"`) and `version:` names a
+    field that alone decides whether an item changed (`"updated_at"`), both
+    found needed by a soak test on GitHub, where one push "changed" all
+    3,186 open vscode pull requests through their embedded repository;
     `[:infusion, :watch, :poll]` telemetry
   * The runtime now has an application (it owns the drift table)
   * `Infusion.Runtime.Schema.variant/3`: the union variant decoding picks

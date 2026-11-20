@@ -251,6 +251,73 @@ defmodule Infusion.Runtime.WatchTest do
     Watch.stop(w)
   end
 
+  test "nested ignore paths, and a version field", %{api: api} do
+    repo = fn pushed -> %{"name" => "vscode", "pushed_at" => pushed} end
+
+    pr = fn id, updated, sha, pushed ->
+      Map.merge(issue(id, "pr #{id}"), %{
+        "updated_at" => updated,
+        "base" => %{"ref" => "main", "repo" => repo.(pushed)},
+        "head" => %{"sha" => sha, "repo" => repo.(pushed)}
+      })
+    end
+
+    set(api, [pr.(1, "t1", "aaa", "p1"), pr.(2, "t1", "bbb", "p1")])
+
+    {:ok, w} =
+      Watch.start_link(config(), @op, [], %{per_page: 10},
+        every: 20,
+        ignore: ["base.repo", "head.repo"]
+      )
+
+    # A push to the repository changes every pull request's embedded repo: no events.
+    set(api, [pr.(1, "t1", "aaa", "p2"), pr.(2, "t1", "bbb", "p2")])
+    assert next_event(w, 120) == :timeout
+
+    # A new commit on one pull request is still seen, as a change to head.
+    set(api, [pr.(1, "t2", "ccc", "p2"), pr.(2, "t1", "bbb", "p2")])
+    assert %Event{type: :updated, id: 1, changes: changes} = next_event(w)
+    assert Map.keys(changes) |> Enum.sort() == [:updated_at, "head"]
+    Watch.stop(w)
+
+    # version: only updated_at decides.
+    {:ok, w} =
+      Watch.start_link(config(), @op, [], %{per_page: 10}, every: 20, version: "updated_at")
+
+    set(api, [pr.(1, "t2", "ccc", "p3"), pr.(2, "t1", "bbb", "p3")])
+    assert next_event(w, 120) == :timeout
+    set(api, [pr.(1, "t2", "ccc", "p3"), Map.put(pr.(2, "t3", "bbb", "p3"), "title", "renamed")])
+    assert %Event{type: :updated, id: 2, changes: %{title: {"pr 2", "renamed"}}} = next_event(w)
+    Watch.stop(w)
+  end
+
+  test "async: an API that is down at start doesn't stop the watcher starting", %{api: api} do
+    Req.Test.stub(__MODULE__, &Plug.Conn.send_resp(&1, 503, "down"))
+
+    assert {:ok, w} =
+             Watch.start_link(config(), @op, [], %{per_page: 10},
+               every: 20,
+               async: true,
+               initial: true
+             )
+
+    assert %Event{type: :error, error: %{status: 503}} = next_event(w)
+
+    # It comes back: the first good poll is the baseline, sent as :created.
+    set(api, [issue(1, "a")])
+
+    Req.Test.stub(__MODULE__, fn conn ->
+      Req.Test.json(conn, Agent.get(api, & &1.issues))
+    end)
+
+    assert %Event{type: :created, id: 1} =
+             Watch.stream(w) |> Stream.reject(&(&1.type == :error)) |> Enum.at(0)
+
+    set(api, [issue(1, "a", "closed")])
+    assert %Event{type: :updated, changes: %{state: {"open", "closed"}}} = next_event(w)
+    Watch.stop(w)
+  end
+
   test "the server's X-Poll-Interval is the minimum", %{api: api} do
     Agent.update(api, &%{&1 | poll: "60"})
     set(api, [issue(1, "a")])

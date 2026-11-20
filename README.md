@@ -349,8 +349,15 @@ against the real API (whose free tier has no realtime API at all):
 
 ![A LiveView table of the top coins, updating live](docs/images/live-watch.gif)
 
-It also works in a supervision tree, broadcasts with
+It also works in a supervision tree (pass `async: true` there, so an API
+that is down when your app boots doesn't stop it starting), broadcasts with
 `to: {:pubsub, MyApp.PubSub, topic}`, or reads as a `Stream`.
+
+Some APIs embed whole related objects in every item: each GitHub pull
+request carries its repository, whose `pushed_at` changes on every push, so
+one push "changes" every open pull request. Watch those with
+`version: "updated_at"` (only that field decides whether an item changed) or
+`ignore: ["base.repo", "head.repo"]`.
 
 Every page is fetched with the `ETag` of the last poll, so a page that
 hasn't changed costs one empty `304 Not Modified` and nothing is decoded.

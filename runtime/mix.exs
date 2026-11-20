@@ -2,9 +2,8 @@ defmodule Infusion.Runtime.MixProject do
   use Mix.Project
 
   @version "0.2.0"
-  # The tag of the Infusion release this runtime ships with (the repository
-  # is tagged with Infusion's versions).
-  @release_tag "v0.6.0"
+  # The repository's tag for this release of the runtime.
+  @release_tag "runtime-v#{@version}"
   @source_url "https://github.com/mandar1045/infusion"
 
   def project do

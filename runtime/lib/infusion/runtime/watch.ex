@@ -55,17 +55,30 @@ defmodule Infusion.Runtime.Watch do
     * `:id`: the JSON field that identifies an item (default: what the SDK
       detected, usually `"id"`), or a function of the raw item
     * `:ignore`: fields whose changes alone aren't worth an event, like
-      `["updated_at"]`
+      `["updated_at"]`, or paths into them: GitHub's pull requests embed
+      their whole repository (`base.repo`, `head.repo`), whose `pushed_at`
+      changes on every push to it, so `ignore: ["base.repo", "head.repo"]`
+      keeps one push from "changing" every open pull request
+    * `:version`: a field that changes whenever the item does, like
+      `"updated_at"`: an item then counts as changed only when that field
+      changed, and nothing else is compared to decide it
+    * `:async`: start without waiting for the first poll (see Supervision)
 
   ## Supervision
 
-  The `_watch` functions start a process linked to the caller, so they work
-  as child specs:
+  By default the first poll runs before the `_watch` function returns, so a
+  wrong path or credential comes back as `{:error, error}` right away. In a
+  supervision tree that would stop your application from starting whenever
+  the API is down or rate-limited at boot, so pass `async: true` there: the
+  watcher starts at once, and until its first poll succeeds every failure is
+  an `:error` event and it tries again at the usual interval.
 
       children = [
         %{
           id: :elixir_issues,
-          start: {GitHub.Issues, :list_for_repo_watch, ["elixir-lang", "elixir", %{}, [to: {:pubsub, MyApp.PubSub, "issues"}]]}
+          start:
+            {GitHub.Issues, :list_for_repo_watch,
+             ["elixir-lang", "elixir", %{}, [async: true, to: {:pubsub, MyApp.PubSub, "issues"}]]}
         }
       ]
 
@@ -95,7 +108,7 @@ defmodule Infusion.Runtime.Watch do
           }
   end
 
-  @watch_keys [:every, :to, :pages, :initial, :id, :ignore]
+  @watch_keys [:every, :to, :pages, :initial, :id, :ignore, :version, :async]
   @max_tracked 50_000
 
   @doc """
@@ -121,26 +134,39 @@ defmodule Infusion.Runtime.Watch do
       to: watch[:to] || self(),
       pages: watch[:pages] || 10,
       id: watch[:id] || pagination[:id] || "id",
-      ignore: Enum.map(watch[:ignore] || [], &to_string/1),
+      # ["base.repo"] -> [["base", "repo"]]
+      ignore: Enum.map(watch[:ignore] || [], &(&1 |> to_string() |> String.split("."))),
+      version: watch[:version] && to_string(watch[:version]),
       etags: %{},
       snapshot: %{},
       # a little earlier than now, for clocks that disagree with the API's
       started_at: DateTime.add(DateTime.utc_now(), -60, :second),
-      poll_interval: nil
+      poll_interval: nil,
+      initial?: watch[:initial] == true,
+      # false until the first poll succeeded (only with async: true)
+      ready?: true
     }
 
-    case poll(state) do
-      {:ok, state, _counts, items} ->
-        snapshot = Map.new(items, &{item_id(state, &1), &1})
+    if watch[:async] do
+      GenServer.start_link(__MODULE__, {:async, %{state | ready?: false}})
+    else
+      case poll(state) do
+        {:ok, state, _counts, items} ->
+          {state, initial} = baseline(state, items)
+          GenServer.start_link(__MODULE__, {state, initial})
 
-        initial =
-          if watch[:initial], do: Enum.map(items, &event(state, :created, &1, nil)), else: []
-
-        GenServer.start_link(__MODULE__, {%{state | snapshot: snapshot}, initial})
-
-      {:error, error, _state} ->
-        {:error, error}
+        {:error, error, _state} ->
+          {:error, error}
+      end
     end
+  end
+
+  # The first successful poll: what is there now, and the :created events
+  # for it when `initial: true`.
+  defp baseline(state, items) do
+    snapshot = Map.new(items, &{item_id(state, &1), &1})
+    initial = if state.initial?, do: Enum.map(items, &event(state, :created, &1, nil)), else: []
+    {%{state | snapshot: snapshot, ready?: true}, initial}
   end
 
   @doc "Stops a watcher."
@@ -167,6 +193,8 @@ defmodule Infusion.Runtime.Watch do
   ## Server
 
   @impl true
+  def init({:async, state}), do: {:ok, state, {:continue, :first_poll}}
+
   def init({state, initial}) do
     Enum.each(initial, &deliver(state, &1))
     schedule(state)
@@ -174,6 +202,29 @@ defmodule Infusion.Runtime.Watch do
   end
 
   @impl true
+  def handle_continue(:first_poll, state), do: {:noreply, first_poll(state)}
+
+  # Until a poll succeeds, failures are :error events and it tries again.
+  defp first_poll(state) do
+    state =
+      case poll(state) do
+        {:ok, state, _counts, items} ->
+          {state, initial} = baseline(state, items)
+          Enum.each(initial, &deliver(state, &1))
+          state
+
+        {:error, error, state} ->
+          deliver(state, %Event{type: :error, error: error, operation: state.label})
+          state
+      end
+
+    schedule(state)
+    state
+  end
+
+  @impl true
+  def handle_info(:poll, %{ready?: false} = state), do: {:noreply, first_poll(state)}
+
   def handle_info(:poll, state) do
     started = System.monotonic_time()
 
@@ -283,7 +334,7 @@ defmodule Infusion.Runtime.Watch do
           not Map.has_key?(state.snapshot, id) ->
             {[event(state, new_type(state, raw, complete?), raw, nil)], MapSet.put(seen, id)}
 
-          state.snapshot[id] != raw ->
+          changed?(state, state.snapshot[id], raw) ->
             ev = event(state, :updated, raw, state.snapshot[id])
             {if(ev.changes == %{}, do: [], else: [ev]), MapSet.put(seen, id)}
 
@@ -388,14 +439,41 @@ defmodule Infusion.Runtime.Watch do
     }
   end
 
+  # With `version`, only that field says whether an item changed; otherwise
+  # any difference outside the ignored paths does.
+  defp changed?(%{version: field}, old, new)
+       when is_binary(field) and is_map(old) and is_map(new),
+       do: Map.get(old, field) != Map.get(new, field)
+
+  defp changed?(state, old, new), do: strip(old, state.ignore) != strip(new, state.ignore)
+
+  # The item without the ignored paths: ["base", "repo"] drops raw["base"]["repo"].
+  defp strip(raw, []), do: raw
+  defp strip(raw, paths) when is_map(raw), do: Enum.reduce(paths, raw, &drop_path(&2, &1))
+  defp strip(raw, _paths), do: raw
+
+  defp drop_path(map, [key]) when is_map(map), do: Map.delete(map, key)
+
+  defp drop_path(map, [key | rest]) when is_map(map) do
+    case Map.fetch(map, key) do
+      {:ok, child} when is_map(child) -> Map.put(map, key, drop_path(child, rest))
+      _ -> map
+    end
+  end
+
+  defp drop_path(other, _path), do: other
+
   # %{field => {old, new}}: struct fields by their atom, with decoded values;
-  # fields the SDK doesn't know by their JSON name, with raw values.
+  # fields the SDK doesn't know by their JSON name, with raw values. Fields
+  # that differ only in ignored paths aren't listed.
   defp diff(state, old_raw, new_raw, old, new) when is_map(old_raw) and is_map(new_raw) do
+    stripped_old = strip(old_raw, state.ignore)
+    stripped_new = strip(new_raw, state.ignore)
+
     names =
-      (Map.keys(old_raw) ++ Map.keys(new_raw))
+      (Map.keys(stripped_old) ++ Map.keys(stripped_new))
       |> Enum.uniq()
-      |> Enum.reject(&(&1 in state.ignore))
-      |> Enum.filter(&(Map.get(old_raw, &1) != Map.get(new_raw, &1)))
+      |> Enum.filter(&(Map.get(stripped_old, &1) != Map.get(stripped_new, &1)))
 
     fields = fields(new)
 
