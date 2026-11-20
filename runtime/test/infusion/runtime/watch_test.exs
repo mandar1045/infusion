@@ -153,6 +153,31 @@ defmodule Infusion.Runtime.WatchTest do
     Watch.stop(w)
   end
 
+  test "creation times as Twilio and Stripe write them", %{api: api} do
+    set(api, [issue(1, "a"), issue(2, "b")])
+    {:ok, w} = Watch.start_link(config(), @op, [], %{per_page: 2}, every: 20, pages: 1)
+
+    now = DateTime.utc_now()
+    twilio_now = Calendar.strftime(now, "%a, %d %b %Y %H:%M:%S +0000")
+
+    set(api, [
+      Map.put(issue(3, "twilio new"), "date_created", twilio_now),
+      Map.put(issue(4, "stripe old"), "created", 1_500_000_000)
+    ])
+
+    events = [next_event(w), next_event(w)] |> Enum.sort_by(& &1.id)
+    assert [%Event{type: :created, id: 3}, %Event{type: :entered, id: 4}] = events
+
+    set(api, [
+      Map.put(issue(5, "stripe new"), "created", DateTime.to_unix(now)),
+      Map.put(issue(6, "twilio old"), "date_created", "Mon, 05 Jan 2015 10:00:00 +0000")
+    ])
+
+    events = [next_event(w), next_event(w)] |> Enum.sort_by(& &1.id)
+    assert [%Event{type: :created, id: 5}, %Event{type: :entered, id: 6}] = events
+    Watch.stop(w)
+  end
+
   test "initial items, ignored fields, a function as the target", %{api: api} do
     set(api, [issue(1, "a"), issue(2, "b")])
     test = self()
