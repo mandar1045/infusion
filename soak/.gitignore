@@ -1,0 +1,7 @@
+/_build/
+/deps/
+/sdks/
+/gen_host/
+/data*/
+*.log
+soak.pid
