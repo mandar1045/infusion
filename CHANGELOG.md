@@ -1,7 +1,10 @@
 # Changelog
 
-## 0.6.1 (unreleased)
+## 0.6.1
 
+  * Watchers in generated SDKs get `infusion_runtime` 0.2.1 (`~> 0.2.0`
+    picks it up): about 25 times less memory on large lists, and no phantom
+    deletes when pages shift between reads. See its changelog
   * A schema the spec doesn't describe (most enums) gets a moduledoc saying
     what it is ("One of `"voice"`, `"fax"`.") instead of being hidden:
     HexDocs warned about every struct type referring to a hidden module
