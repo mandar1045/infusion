@@ -2,6 +2,9 @@ defmodule Infusion.Runtime.MixProject do
   use Mix.Project
 
   @version "0.2.0"
+  # The tag of the Infusion release this runtime ships with (the repository
+  # is tagged with Infusion's versions).
+  @release_tag "v0.6.0"
   @source_url "https://github.com/mandar1045/infusion"
 
   def project do
@@ -39,7 +42,7 @@ defmodule Infusion.Runtime.MixProject do
     [
       main: "readme",
       extras: ["README.md", "CHANGELOG.md"],
-      source_url_pattern: "#{@source_url}/blob/v#{@version}/runtime/%{path}#L%{line}"
+      source_url_pattern: "#{@source_url}/blob/#{@release_tag}/runtime/%{path}#L%{line}"
     ]
   end
 

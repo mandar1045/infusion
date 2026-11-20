@@ -135,12 +135,21 @@ defmodule Infusion.Runtime.WatchTest do
     assert %Event{type: :deleted, id: 1} = next_event(w)
     Watch.stop(w)
 
-    # Only the first page of 2: issue 1 scrolling out isn't a delete.
+    # Only the first page of 2: issue 1 scrolling out isn't a delete; an
+    # unseen item is :created when it was created after the watcher started,
+    # :entered when it is an old one that moved into view.
     set(api, for(i <- 1..5, do: issue(i, "##{i}")))
     {:ok, w} = Watch.start_link(config(), @op, [], %{per_page: 2}, every: 20, pages: 1)
-    set(api, [issue(9, "new") | for(i <- 2..5, do: issue(i, "##{i}"))])
+    now = DateTime.utc_now() |> DateTime.to_iso8601()
+
+    set(api, [Map.put(issue(9, "new"), "created_at", now) | for(i <- 2..5, do: issue(i, "##{i}"))])
+
     assert %Event{type: :created, id: 9} = next_event(w)
     assert next_event(w, 100) == :timeout
+
+    old = Map.put(issue(4, "#4 bumped"), "created_at", "2019-01-01T00:00:00Z")
+    set(api, [old, Map.put(issue(9, "new"), "created_at", now), issue(5, "#5")])
+    assert %Event{type: :entered, id: 4} = next_event(w)
     Watch.stop(w)
   end
 
@@ -183,7 +192,7 @@ defmodule Infusion.Runtime.WatchTest do
              Watch.start_link(config(), @op, [], %{})
 
     Req.Test.stub(__MODULE__, &Req.Test.json(&1, [issue(1, "a")]))
-    {:ok, w} = Watch.start_link(config(), @op, [], %{}, every: 20)
+    {:ok, w} = Watch.start_link(config(), @op, [], %{per_page: 10}, every: 20)
     Req.Test.stub(__MODULE__, &Plug.Conn.send_resp(&1, 500, "down"))
     assert %Event{type: :error, error: %{type: :internal_server}} = next_event(w)
 

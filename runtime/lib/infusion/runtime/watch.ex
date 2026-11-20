@@ -28,13 +28,17 @@ defmodule Infusion.Runtime.Watch do
   ## Events
 
   `%Infusion.Runtime.Watch.Event{}` with `type` `:created`, `:updated`,
-  `:deleted` or `:error`, the item's `id`, the decoded `item` (the last seen
+  `:deleted`, `:entered` or `:error`, the item's `id`, the decoded `item` (the last seen
   one for `:deleted`), the `previous` version (for `:updated`), and
   `changes`: `%{field => {old, new}}` for the fields that changed.
 
-  A deleted item is only reported when the watcher read the whole list (it
-  reached the last page within `:pages`): an item that left a partial view
-  may just have moved further down.
+  A watcher that reads the whole list (it reaches the last page within
+  `:pages`) knows exactly what was created and deleted. A partial view,
+  like the first page of issues sorted by update time, can't tell: an item
+  that leaves it may just have moved down, so no `:deleted` is sent, and an
+  item it hasn't seen before is `:created` only when its creation time
+  (`created_at`, `created`, `date_created`, ...) is after the watcher
+  started. Otherwise it is `:entered`: an older item that moved into view.
 
   ## Options
 
@@ -68,7 +72,8 @@ defmodule Infusion.Runtime.Watch do
   ## Telemetry
 
   `[:infusion, :watch, :poll]` after each poll, with `%{duration, pages,
-  not_modified, created, updated, deleted}` and `%{operation, watcher}`.
+  not_modified, created, updated, deleted, entered}` and `%{operation,
+  watcher}`.
   """
 
   use GenServer
@@ -80,7 +85,7 @@ defmodule Infusion.Runtime.Watch do
     defstruct [:type, :id, :item, :previous, :operation, :error, changes: %{}]
 
     @type t :: %__MODULE__{
-            type: :created | :updated | :deleted | :error,
+            type: :created | :updated | :deleted | :entered | :error,
             id: term,
             item: term,
             previous: term,
@@ -119,6 +124,8 @@ defmodule Infusion.Runtime.Watch do
       ignore: Enum.map(watch[:ignore] || [], &to_string/1),
       etags: %{},
       snapshot: %{},
+      # a little earlier than now, for clocks that disagree with the API's
+      started_at: DateTime.add(DateTime.utc_now(), -60, :second),
       poll_interval: nil
     }
 
@@ -274,7 +281,7 @@ defmodule Infusion.Runtime.Watch do
             {[], seen}
 
           not Map.has_key?(state.snapshot, id) ->
-            {[event(state, :created, raw, nil)], MapSet.put(seen, id)}
+            {[event(state, new_type(state, raw, complete?), raw, nil)], MapSet.put(seen, id)}
 
           state.snapshot[id] != raw ->
             ev = event(state, :updated, raw, state.snapshot[id])
@@ -298,6 +305,69 @@ defmodule Infusion.Runtime.Watch do
     snapshot = if complete?, do: current, else: cap(Map.merge(state.snapshot, current))
     {%{state | snapshot: snapshot}, events ++ deleted}
   end
+
+  # An item the watcher hasn't seen. Reading the whole list, it is new. In a
+  # partial view (the first page of issues sorted by update time) it may be
+  # an old item that moved in: it is :created only when its creation time
+  # says so, else :entered.
+  defp new_type(_state, _raw, true), do: :created
+
+  defp new_type(state, raw, false) do
+    case created_at(raw) do
+      %DateTime{} = at ->
+        if DateTime.compare(at, state.started_at) != :lt, do: :created, else: :entered
+
+      nil ->
+        :entered
+    end
+  end
+
+  @created_fields ~w(created_at created date_created createdAt creation_time inserted_at)
+  defp created_at(raw) when is_map(raw) do
+    Enum.find_value(@created_fields, fn field -> timestamp(Map.get(raw, field)) end)
+  end
+
+  defp created_at(_raw), do: nil
+
+  defp timestamp(value) when is_binary(value) do
+    case DateTime.from_iso8601(value) do
+      {:ok, at, _offset} ->
+        at
+
+      _ ->
+        # RFC 2822, as Twilio writes dates: "Fri, 20 Nov 2026 14:21:35 +0000"
+        case Regex.run(
+               ~r/^\w{3}, (\d{1,2}) (\w{3}) (\d{4}) (\d{2}):(\d{2}):(\d{2}) \+0000$/,
+               value
+             ) do
+          [_, d, mon, y, h, m, sec] ->
+            month =
+              Enum.find_index(~w(Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec), &(&1 == mon))
+
+            with true <- month != nil,
+                 {:ok, date} <- Date.new(String.to_integer(y), month + 1, String.to_integer(d)),
+                 {:ok, time} <-
+                   Time.new(String.to_integer(h), String.to_integer(m), String.to_integer(sec)),
+                 {:ok, at} <- DateTime.new(date, time) do
+              at
+            else
+              _ -> nil
+            end
+
+          _ ->
+            nil
+        end
+    end
+  end
+
+  # Unix seconds (Stripe), or milliseconds.
+  defp timestamp(value) when is_integer(value) and value > 100_000_000_000,
+    do: DateTime.from_unix!(div(value, 1000))
+
+  defp timestamp(value) when is_integer(value) and value > 100_000_000,
+    do: DateTime.from_unix!(value)
+
+  defp timestamp(_value), do: nil
 
   defp cap(snapshot) when map_size(snapshot) <= @max_tracked, do: snapshot
   defp cap(snapshot), do: snapshot |> Enum.take(@max_tracked) |> Map.new()
@@ -379,7 +449,8 @@ defmodule Infusion.Runtime.Watch do
         not_modified: counts.not_modified,
         created: by_type[:created] || 0,
         updated: by_type[:updated] || 0,
-        deleted: by_type[:deleted] || 0
+        deleted: by_type[:deleted] || 0,
+        entered: by_type[:entered] || 0
       },
       %{operation: state.label, watcher: self()}
     )

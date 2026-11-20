@@ -193,7 +193,7 @@ defmodule Infusion.Gen.Operations do
              "Like `#{name}/#{arity}`, but returns every item, from every page: a lazy stream of `#{item}` that fetches pages as it is read.\n\nThe first page is fetched right away, so its errors are returned; a later page that fails raises `Infusion.Runtime.Error`. Stopping early (`Enum.take/2`) fetches no more pages."},
             {watch_name, "{:ok, pid()} | {:error, Infusion.Runtime.Error.t()}", "pid()",
              watch_call,
-             "Watches this list and sends what changes: starts a process, linked to the caller, that polls it (with `ETag`s, so unchanged pages cost a `304`) and sends `{:infusion_watch, pid, %Infusion.Runtime.Watch.Event{}}` for every #{item} created, updated or deleted.\n\nOptions: `every:` (milliseconds, default 30 seconds), `to:` (a pid, `{:pubsub, MyApp.PubSub, topic}` or a function), `pages:`, `initial:`, `ignore:`, plus any setting of `Infusion.Runtime.Config`. See `Infusion.Runtime.Watch`."}
+             "Watches this list and sends what changes: starts a process, linked to the caller, that polls it (with `ETag`s, so unchanged pages cost a `304`) and sends `{:infusion_watch, pid, %Infusion.Runtime.Watch.Event{}}` for every #{item} created, updated, deleted, or that moved into view (`:entered`).\n\nOptions: `every:` (milliseconds, default 30 seconds), `to:` (a pid, `{:pubsub, MyApp.PubSub, topic}` or a function), `pages:`, `initial:`, `ignore:`, plus any setting of `Infusion.Runtime.Config`. See `Infusion.Runtime.Watch`."}
           ]
 
         true ->

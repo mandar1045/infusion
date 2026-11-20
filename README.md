@@ -89,7 +89,7 @@ Add Infusion to any Mix project as a dev tool:
 
 ```elixir
 def deps do
-  [{:infusion, "~> 0.5", only: :dev, runtime: false}]
+  [{:infusion, "~> 0.6", only: :dev, runtime: false}]
 end
 ```
 
@@ -332,7 +332,7 @@ everything else. Every paginated list function of a generated SDK has a
 ```elixir
 {:ok, watcher} = CoinGecko.Coins.Markets.list_watch(%{vs_currency: "usd", per_page: 20}, every: 30_000, pages: 1)
 
-# the calling process receives
+# the calling process receives, for every coin that changed
 {:infusion_watch, ^watcher,
  %Infusion.Runtime.Watch.Event{
    type: :updated,
@@ -347,17 +347,27 @@ It's a process linked to the caller, so a LiveView that starts one in
 LiveView app (about 100 lines, styles included), fed by the SDK generated from CoinGecko's spec, running
 against the real API (whose free tier has no realtime API at all):
 
-![A LiveView table of the top coins, updating live](docs/images/live-watch.png)
+![A LiveView table of the top coins, updating live](docs/images/live-watch.gif)
 
 It also works in a supervision tree, broadcasts with
 `to: {:pubsub, MyApp.PubSub, topic}`, or reads as a `Stream`.
 
 Every page is fetched with the `ETag` of the last poll, so a page that
 hasn't changed costs one empty `304 Not Modified` and nothing is decoded.
-Watching CoinGecko's top 20 every 30 seconds (it refreshes once a minute),
-every other poll was a 304. GitHub doesn't count 304s to authenticated
-requests against your rate limit. Deletions are reported when the watcher
-reads the whole list; `X-Poll-Interval` is respected. See
+GitHub doesn't count those against your rate limit when the request is
+authenticated: watching `elixir-lang/elixir`'s releases for 30 seconds
+took 19 requests, and GitHub's own counter went up by 1. On CoinGecko
+(which refreshes once a minute), polling every 30 seconds, every other poll
+was a 304.
+
+A watcher that reads the whole list knows what was created and deleted. A
+partial view, like the first page of `microsoft/vscode`'s issues sorted by
+update time, can't: an issue that drops off it isn't reported as deleted,
+and an old issue that moves into it arrives as `:entered`, not `:created`
+(told apart by its `created_at`). Watching that page live for a few
+minutes showed both: new pull requests as `:created`, a July issue someone
+commented on as `:entered`, a pull request leaving draft as `:updated` with
+`[:draft]` changed. `X-Poll-Interval` is respected. See
 `Infusion.Runtime.Watch`.
 
 ## How it's built

@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.0 (unreleased)
+## 0.2.0
 
   * `Infusion.Runtime.Drift`: compares an API's responses (and stream
     events) with the spec the SDK was generated from, when turned on with
@@ -13,7 +13,9 @@
     `:updated` and `:deleted` events (with the fields that changed), sent
     to a process, a function or a `Phoenix.PubSub` topic. Every page is
     asked for with `If-None-Match`, so unchanged pages are a `304`; deletes
-    only when the whole list was read; `X-Poll-Interval` respected;
+    only when the whole list was read; an item new to a partial view is
+    `:created` only when its creation time says so, else `:entered`;
+    `X-Poll-Interval` respected;
     `[:infusion, :watch, :poll]` telemetry
   * The runtime now has an application (it owns the drift table)
   * `Infusion.Runtime.Schema.variant/3`: the union variant decoding picks
