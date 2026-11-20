@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.1 (unreleased)
+
+  * A schema the spec doesn't describe (most enums) gets a moduledoc saying
+    what it is ("One of `"voice"`, `"fax"`.") instead of being hidden:
+    HexDocs warned about every struct type referring to a hidden module
+    (8 warnings in the Twilio SDK)
+
 ## 0.6.0
 
 SDKs that notice when the API disagrees with its own spec, and fix

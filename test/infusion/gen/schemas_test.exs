@@ -262,4 +262,11 @@ defmodule Infusion.Gen.SchemasTest do
     permissions = Enum.find(files, &(&1.module == "Hub.Schemas.Issue.Permissions")).source
     assert permissions =~ "def __schema__(:additional), do: :string"
   end
+
+  test "a schema the spec doesn't describe still gets docs (else docs referring to it warn)" do
+    {files, _} = generate(@spec_doc, "Pets")
+    kind = Enum.find(files, &(&1.module == "Pets.Schemas.Kind")).source
+    assert kind =~ ~S|One of `"dog"`, `"cat"`.|
+    refute kind =~ "@moduledoc false"
+  end
 end

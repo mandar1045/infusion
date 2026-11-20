@@ -346,7 +346,7 @@ defmodule Infusion.Gen.Schemas do
   defp module_source(module, schema, modules, _nullable_refs) do
     """
     defmodule #{module} do
-      @moduledoc #{doc(schema.description, [])}
+      @moduledoc #{doc(schema.description || type_summary(schema, modules), [])}
 
       @type t :: #{typespec(schema, modules)}
 
@@ -465,6 +465,13 @@ defmodule Infusion.Gen.Schemas do
   defp discriminator(_, _modules), do: "nil"
 
   ## Docs
+
+  # A schema the spec doesn't describe still gets a moduledoc: a hidden
+  # module would break the docs of every struct whose type refers to it.
+  defp type_summary(%Schema{kind: :enum, values: values}, _modules),
+    do: "One of " <> Enum.map_join(values, ", ", &"`#{inspect(&1)}`") <> "."
+
+  defp type_summary(schema, modules), do: "`#{typespec(schema, modules)}`"
 
   defp doc(description, fields) do
     text = String.trim(description || "")
