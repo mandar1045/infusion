@@ -32,13 +32,18 @@ defmodule Infusion.Runtime.Watch do
   one for `:deleted`), the `previous` version (for `:updated`), and
   `changes`: `%{field => {old, new}}` for the fields that changed.
 
-  A watcher that reads the whole list (it reaches the last page within
-  `:pages`) knows exactly what was created and deleted. A partial view,
-  like the first page of issues sorted by update time, can't tell: an item
-  that leaves it may just have moved down, so no `:deleted` is sent, and an
-  item it hasn't seen before is `:created` only when its creation time
-  (`created_at`, `created`, `date_created`, ...) is after the watcher
-  started. Otherwise it is `:entered`: an older item that moved into view.
+  An item the watcher hasn't seen before is `:created` when its creation
+  time (`created_at`, `created`, `date_created`, ...) is after the watcher
+  started, and `:entered` when it is older: it moved into a partial view
+  (the first page of issues sorted by update time), was reopened, or was
+  missed by an earlier read.
+
+  Deletions are only reported by a watcher that reads the whole list (it
+  reaches the last page within `:pages`): an item that leaves a partial
+  view may just have moved down. Pages are read one after another and can
+  shift in between (when an item on page 1 goes away, every later item moves
+  up one and one falls between two pages), so on a list of several pages an
+  item is reported `:deleted` only after two reads in a row missed it.
 
   ## Options
 
@@ -139,6 +144,7 @@ defmodule Infusion.Runtime.Watch do
       version: watch[:version] && to_string(watch[:version]),
       etags: %{},
       snapshot: %{},
+      pending_deletes: MapSet.new(),
       # a little earlier than now, for clocks that disagree with the API's
       started_at: DateTime.add(DateTime.utc_now(), -60, :second),
       poll_interval: nil,
@@ -163,9 +169,10 @@ defmodule Infusion.Runtime.Watch do
 
   # The first successful poll: what is there now, and the :created events
   # for it when `initial: true`.
-  defp baseline(state, items) do
-    snapshot = Map.new(items, &{item_id(state, &1), &1})
-    initial = if state.initial?, do: Enum.map(items, &event(state, :created, &1, nil)), else: []
+  defp baseline(state, entries) do
+    raws = for {:raw, raw} <- entries, do: raw
+    snapshot = Map.new(raws, &{item_id(state, &1), entry(state, &1)})
+    initial = if state.initial?, do: Enum.map(raws, &event(state, :created, &1, nil)), else: []
     {%{state | snapshot: snapshot, ready?: true}, initial}
   end
 
@@ -231,7 +238,7 @@ defmodule Infusion.Runtime.Watch do
     state =
       case poll(state) do
         {:ok, state, counts, items} ->
-          {state, events} = changes(state, items, counts.complete?)
+          {state, events} = changes(state, items, counts)
           Enum.each(events, &deliver(state, &1))
           telemetry(state, started, counts, events)
           state
@@ -254,8 +261,10 @@ defmodule Infusion.Runtime.Watch do
 
   ## Polling
 
-  # Reads up to `pages` pages, each conditionally. Returns every raw item
-  # and whether the whole list was read.
+  # Reads up to `pages` pages, each conditionally. Returns what is on them,
+  # in order: {:raw, item} from pages that came back, {:same, id} from pages
+  # that hadn't changed (a 304 says none of their items did), and whether
+  # the whole list was read.
   defp poll(state), do: poll_pages(state, state.first, 1, [], %{pages: 0, not_modified: 0})
 
   defp poll_pages(state, request, n, acc, counts) do
@@ -266,14 +275,17 @@ defmodule Infusion.Runtime.Watch do
     case Paginate.fetch(state.config, request, opts) do
       {:ok, response} ->
         {raw, next} = Paginate.page(response, request, state.pagination)
-        state = remember(state, key, response, {raw, next})
-        continue(state, next, n, acc ++ raw, %{counts | pages: counts.pages + 1})
+        # Only the ids are kept for the page: if it comes back 304, its items
+        # are the ones in the snapshot.
+        state = remember(state, key, response, {Enum.map(raw, &item_id(state, &1)), next})
+        acc = Enum.reduce(raw, acc, &[{:raw, &1} | &2])
+        continue(state, next, n, acc, %{counts | pages: counts.pages + 1})
 
       {:error, %Error{status: 304} = error} when cached != nil ->
-        {raw, next} = cached
+        {ids, next} = cached
         state = %{state | poll_interval: poll_interval(error.headers) || state.poll_interval}
         counts = %{counts | pages: counts.pages + 1, not_modified: counts.not_modified + 1}
-        continue(state, next, n, acc ++ raw, counts)
+        continue(state, next, n, Enum.reduce(ids, acc, &[{:same, &1} | &2]), counts)
 
       {:error, error} ->
         {:error, error, state}
@@ -284,7 +296,7 @@ defmodule Infusion.Runtime.Watch do
     do: poll_pages(state, request, n + 1, acc, counts)
 
   defp continue(state, next, _n, acc, counts),
-    do: {:ok, state, Map.put(counts, :complete?, next == :done), acc}
+    do: {:ok, state, Map.put(counts, :complete?, next == :done), Enum.reverse(acc)}
 
   defp conditional(opts, nil), do: opts
 
@@ -320,56 +332,106 @@ defmodule Infusion.Runtime.Watch do
 
   ## Comparing
 
-  defp changes(state, items, complete?) do
-    current = Map.new(items, &{item_id(state, &1), &1})
+  # The snapshot keeps, per item, a fingerprint of what counts as a change
+  # and the item itself compressed into a binary (off the process heap: a
+  # list of 3,000 GitHub pull requests is hundreds of MB as terms). An item
+  # is only unpacked when it changed or went away.
+  defp changes(state, entries, %{complete?: complete?, pages: pages}) do
+    {events, current} =
+      Enum.reduce(entries, {[], %{}}, fn
+        {:same, id}, {events, current} ->
+          case Map.fetch(state.snapshot, id) do
+            {:ok, kept} -> {events, Map.put_new(current, id, kept)}
+            :error -> {events, current}
+          end
 
-    {events, _} =
-      Enum.flat_map_reduce(items, MapSet.new(), fn raw, seen ->
-        id = item_id(state, raw)
+        {:raw, raw}, {events, current} ->
+          id = item_id(state, raw)
 
-        cond do
-          MapSet.member?(seen, id) ->
-            {[], seen}
+          if Map.has_key?(current, id) do
+            # the same item twice (pages shifted while they were read)
+            {events, current}
+          else
+            new = entry(state, raw)
 
-          not Map.has_key?(state.snapshot, id) ->
-            {[event(state, new_type(state, raw, complete?), raw, nil)], MapSet.put(seen, id)}
+            events =
+              case Map.fetch(state.snapshot, id) do
+                :error ->
+                  [event(state, new_type(state, raw, complete?), raw, nil) | events]
 
-          changed?(state, state.snapshot[id], raw) ->
-            ev = event(state, :updated, raw, state.snapshot[id])
-            {if(ev.changes == %{}, do: [], else: [ev]), MapSet.put(seen, id)}
+                {:ok, {fingerprint, _}} when fingerprint == elem(new, 0) ->
+                  events
 
-          true ->
-            {[], MapSet.put(seen, id)}
-        end
+                {:ok, {_, packed}} ->
+                  ev = event(state, :updated, raw, unpack(packed))
+                  if ev.changes == %{}, do: events, else: [ev | events]
+              end
+
+            {events, Map.put(current, id, new)}
+          end
       end)
 
-    deleted =
-      if complete? do
-        for {id, raw} <- state.snapshot,
+    missing =
+      if complete?,
+        do:
+          for(
+            {id, kept} <- state.snapshot,
             not Map.has_key?(current, id),
-            do: event(state, :deleted, raw, nil)
-      else
-        []
-      end
+            into: %{},
+            do: {id, kept}
+          ),
+        else: %{}
 
-    # A partial view keeps what scrolled out of it, to know it when it comes back.
-    snapshot = if complete?, do: current, else: cap(Map.merge(state.snapshot, current))
-    {%{state | snapshot: snapshot}, events ++ deleted}
+    # Pages read one after another can shift in between (an item on page 1
+    # deleted moves every later item up one, and one falls between two
+    # pages), so on a list of several pages an item is only deleted when two
+    # reads in a row missed it. One page is read at once: no need to wait.
+    {confirmed, pending} =
+      if pages > 1,
+        do: Map.split_with(missing, fn {id, _} -> MapSet.member?(state.pending_deletes, id) end),
+        else: {missing, %{}}
+
+    deleted = for {_id, {_, packed}} <- confirmed, do: event(state, :deleted, unpack(packed), nil)
+
+    # A partial view keeps what scrolled out of it, to know it when it comes
+    # back; a complete one keeps only what may still come back.
+    snapshot =
+      if complete?,
+        do: Map.merge(current, pending),
+        else: cap(Map.merge(state.snapshot, current))
+
+    pending_deletes = if complete?, do: MapSet.new(Map.keys(pending)), else: state.pending_deletes
+
+    {%{state | snapshot: snapshot, pending_deletes: pending_deletes},
+     Enum.reverse(events) ++ deleted}
   end
 
-  # An item the watcher hasn't seen. Reading the whole list, it is new. In a
-  # partial view (the first page of issues sorted by update time) it may be
-  # an old item that moved in: it is :created only when its creation time
-  # says so, else :entered.
-  defp new_type(_state, _raw, true), do: :created
+  defp entry(state, raw),
+    do: {fingerprint(state, raw), :erlang.term_to_binary(raw, [:compressed])}
 
-  defp new_type(state, raw, false) do
+  defp unpack(packed), do: :erlang.binary_to_term(packed)
+
+  # What decides whether an item changed: the `version` field, or a hash of
+  # the item without its ignored paths.
+  defp fingerprint(%{version: field}, raw) when is_binary(field) and is_map(raw),
+    do: {:version, copy(Map.get(raw, field))}
+
+  defp fingerprint(state, raw),
+    do: :crypto.hash(:sha256, :erlang.term_to_binary(strip(raw, state.ignore), [:deterministic]))
+
+  # An item the watcher hasn't seen: :created when its creation time is
+  # after the watcher started. An older one came into view: it moved into a
+  # partial view (the first page of issues sorted by update time), was
+  # reopened, or was missed by a read whose pages shifted. Without a
+  # creation time, a complete list calls it :created, a partial view
+  # :entered.
+  defp new_type(state, raw, complete?) do
     case created_at(raw) do
       %DateTime{} = at ->
         if DateTime.compare(at, state.started_at) != :lt, do: :created, else: :entered
 
       nil ->
-        :entered
+        if complete?, do: :created, else: :entered
     end
   end
 
@@ -439,14 +501,6 @@ defmodule Infusion.Runtime.Watch do
     }
   end
 
-  # With `version`, only that field says whether an item changed; otherwise
-  # any difference outside the ignored paths does.
-  defp changed?(%{version: field}, old, new)
-       when is_binary(field) and is_map(old) and is_map(new),
-       do: Map.get(old, field) != Map.get(new, field)
-
-  defp changed?(state, old, new), do: strip(old, state.ignore) != strip(new, state.ignore)
-
   # The item without the ignored paths: ["base", "repo"] drops raw["base"]["repo"].
   defp strip(raw, []), do: raw
   defp strip(raw, paths) when is_map(raw), do: Enum.reduce(paths, raw, &drop_path(&2, &1))
@@ -495,16 +549,21 @@ defmodule Infusion.Runtime.Watch do
 
   defp fields(_item), do: %{}
 
-  defp item_id(%{id: fun}, raw) when is_function(fun, 1), do: fun.(raw)
+  defp item_id(%{id: fun}, raw) when is_function(fun, 1), do: copy(fun.(raw))
 
   defp item_id(%{id: key}, raw) when is_map(raw) do
     case Map.fetch(raw, key) do
-      {:ok, id} when id != nil -> id
+      {:ok, id} when id != nil -> copy(id)
       _ -> {:hash, :erlang.phash2(raw)}
     end
   end
 
   defp item_id(_state, raw), do: {:hash, :erlang.phash2(raw)}
+
+  # Strings decoded from JSON point into the whole response body: keeping
+  # one (an ID, a version) would keep the page alive. Copied, they don't.
+  defp copy(value) when is_binary(value), do: :binary.copy(value)
+  defp copy(value), do: value
 
   ## Delivering
 

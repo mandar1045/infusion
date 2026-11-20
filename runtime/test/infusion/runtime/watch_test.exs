@@ -251,6 +251,41 @@ defmodule Infusion.Runtime.WatchTest do
     Watch.stop(w)
   end
 
+  test "pages that shift between reads don't make phantom deletes (seen on GitHub)", %{api: api} do
+    set(api, for(i <- 1..5, do: issue(i, "##{i}")))
+    {:ok, w} = Watch.start_link(config(), @op, [], %{per_page: 2}, every: 30)
+
+    # Issue 1 goes away right after page 1 was read: every later issue moves
+    # up one, so this read sees [1, 2] then [4, 5], and never 3.
+    Req.Test.stub(__MODULE__, fn conn ->
+      conn = Plug.Conn.fetch_query_params(conn)
+      page = String.to_integer(conn.query_params["page"] || "1")
+      %{issues: issues} = Agent.get(api, & &1)
+      items = issues |> Enum.drop((page - 1) * 2) |> Enum.take(2)
+
+      if page == 1 and Enum.any?(issues, &(&1["id"] == 1)) and Process.get(:shifted) == nil do
+        Agent.update(api, fn st -> %{st | issues: tl(st.issues)} end)
+      end
+
+      Req.Test.json(conn, items)
+    end)
+
+    # Only the real deletion arrives, once a second read confirms it.
+    assert %Event{type: :deleted, id: 1} = next_event(w, 1_000)
+    assert next_event(w, 200) == :timeout
+    Watch.stop(w)
+  end
+
+  test "an old item appearing in a complete list is :entered", %{api: api} do
+    set(api, [issue(1, "a")])
+    {:ok, w} = Watch.start_link(config(), @op, [], %{per_page: 10}, every: 20)
+
+    reopened = Map.put(issue(2, "reopened"), "created_at", "2020-01-01T00:00:00Z")
+    set(api, [issue(1, "a"), reopened])
+    assert %Event{type: :entered, id: 2} = next_event(w)
+    Watch.stop(w)
+  end
+
   test "nested ignore paths, and a version field", %{api: api} do
     repo = fn pushed -> %{"name" => "vscode", "pushed_at" => pushed} end
 

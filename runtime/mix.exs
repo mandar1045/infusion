@@ -1,7 +1,7 @@
 defmodule Infusion.Runtime.MixProject do
   use Mix.Project
 
-  @version "0.2.0"
+  @version "0.2.1"
   # The repository's tag for this release of the runtime.
   @release_tag "runtime-v#{@version}"
   @source_url "https://github.com/mandar1045/infusion"
@@ -22,7 +22,7 @@ defmodule Infusion.Runtime.MixProject do
   end
 
   def application do
-    [extra_applications: [:logger], mod: {Infusion.Runtime.Application, []}]
+    [extra_applications: [:logger, :crypto], mod: {Infusion.Runtime.Application, []}]
   end
 
   defp deps do

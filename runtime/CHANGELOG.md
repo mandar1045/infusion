@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.2.1
+
+Found by a soak test watching real GitHub and CoinGecko lists (3,185 open
+pull requests of microsoft/vscode among them), with every list checked
+against a direct fetch every 10 minutes.
+
+  * Watchers use about 25 times less memory: one watching vscode's open pull
+    requests held 320-370 MB, now about 14 MB. Items are kept as a
+    fingerprint plus a compressed binary, unpacked only when they change; a
+    page that comes back `304` keeps only its item IDs; and IDs and version
+    values are copied out of the response, which kept every page body alive
+    through strings pointing into it
+  * No more phantom deletes: pages read one after another shift when an item
+    on an earlier page goes away, and an item could fall between two pages
+    and be reported `:deleted` (then `:created` again). On a list of several
+    pages, an item is now deleted only when two reads in a row missed it
+  * An item with a creation time from before the watcher started is
+    `:entered`, not `:created`, on complete lists too (reopened, or missed
+    by an earlier read)
+
 ## 0.2.0
 
   * `Infusion.Runtime.Drift`: compares an API's responses (and stream
