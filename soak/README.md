@@ -50,8 +50,8 @@ Running it found four bugs in `infusion_runtime`, all fixed in 0.2.0 and
    the repository embedded in every PR. Fixed with `version: "updated_at"` and
    nested `ignore:` paths.
 3. A watcher on those PRs held 320-370 MB; now about 14 MB, measured on the
-   same 32 pages. Items are kept compressed, and IDs are copied out of the
-   response so they don't keep whole page bodies alive.
+   same 32 pages. Items are kept compressed instead of as decoded terms, whose
+   strings also pointed into (and kept alive) every page body.
 4. Pages shifted while they were read (PRs merged on page 1), so two PRs open
    since November 18 fell between pages and were reported as created.
    Deletes on multi-page lists now need two reads to confirm, and items

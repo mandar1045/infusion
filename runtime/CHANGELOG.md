@@ -8,10 +8,10 @@ against a direct fetch every 10 minutes.
 
   * Watchers use about 25 times less memory: one watching vscode's open pull
     requests held 320-370 MB, now about 14 MB. Items are kept as a
-    fingerprint plus a compressed binary, unpacked only when they change; a
-    page that comes back `304` keeps only its item IDs; and IDs and version
-    values are copied out of the response, which kept every page body alive
-    through strings pointing into it
+    fingerprint plus a compressed binary, unpacked only when they change (the
+    decoded items also kept every page body alive, through strings pointing
+    into it); a page that comes back `304` keeps only its item IDs; IDs and
+    version values are copied out of the response
   * No more phantom deletes: pages read one after another shift when an item
     on an earlier page goes away, and an item could fall between two pages
     and be reported `:deleted` (then `:created` again). On a list of several
